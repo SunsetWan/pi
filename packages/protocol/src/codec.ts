@@ -17,6 +17,12 @@ export class ProtocolValidationError extends Error {
 	}
 }
 
+/**
+ * EN: Validate the strict envelope schema and the recursive JSON-value contract. A value accepted by a
+ * broad schema is still rejected if it contains unsupported nested values.
+ *
+ * ZH: 同时验证严格信封结构与递归 JSON 值约束。即使外层 schema 接受某字段，内部含有不支持的值时仍会拒绝。
+ */
 export function parseClientMessage(value: unknown): ClientMessage {
 	if (!Check(ClientMessageSchema, value) || !isJsonValue(value)) {
 		throw new ProtocolValidationError("Invalid client protocol message");
@@ -24,6 +30,12 @@ export function parseClientMessage(value: unknown): ClientMessage {
 	return value;
 }
 
+/**
+ * EN: Apply the same envelope and JSON-value boundary to server messages. This does not interpret Chord
+ * service operations inside payloads.
+ *
+ * ZH: 对服务端消息应用相同的信封与 JSON 值边界；这里不解释负载内部的 Chord 服务操作。
+ */
 export function parseServerMessage(value: unknown): ServerMessage {
 	if (!Check(ServerMessageSchema, value) || !isJsonValue(value)) {
 		throw new ProtocolValidationError("Invalid server protocol message");
@@ -52,7 +64,12 @@ function encodeProtocolMessage<T>(
 	}
 }
 
-/** Validates and encodes one complete length-prefixed client message. */
+/**
+ * EN: Validate the message, encode CBOR, enforce the configured payload limit, then add the four-byte
+ * length prefix. A typed caller must still pass runtime validation.
+ *
+ * ZH: 先验证消息，再编码 CBOR、检查配置的负载上限，最后添加四字节长度前缀。即使调用端有静态类型，也必须通过运行时验证。
+ */
 export function encodeClientMessage(message: ClientMessage, options?: FrameDecoderOptions): Uint8Array {
 	return encodeProtocolMessage(message, parseClientMessage, "client", options);
 }
@@ -62,6 +79,12 @@ export function encodeServerMessage(message: ServerMessage, options?: FrameDecod
 	return encodeProtocolMessage(message, parseServerMessage, "server", options);
 }
 
+/**
+ * EN: Compose frame assembly, CBOR decoding, and envelope validation. Any decoding failure is latched, so
+ * later chunks cannot resume a stream whose message boundary or meaning is no longer trusted.
+ *
+ * ZH: 组合帧组装、CBOR 解码与信封验证。任一解码错误都会保留为终止性失败，后续数据不能继续使用已失去可信边界或语义的流。
+ */
 class ValidatedMessageDecoder<T> {
 	private failed = false;
 	private readonly frames: FrameDecoder;

@@ -11,6 +11,12 @@ export interface SpanOptions {
 
 export type SpanStatus = { status: "ok" } | { status: "error"; error?: { name: string; message: string } };
 
+/**
+ * EN: Explicit parent context for scoped spans. Callers pass it through their own control flow instead of
+ * depending on a global current span. The callback result and rejection remain business results.
+ *
+ * ZH: 显式传递的父级 span 上下文。调用者沿自身控制流传递它，而不依赖全局当前 span；回调的返回值与拒绝仍属于业务结果。
+ */
 export interface TelemetryContext {
 	startSpan<T>(options: SpanOptions, callback: (span: TelemetrySpan) => T | Promise<T>): Promise<T>;
 }
@@ -68,7 +74,12 @@ export interface TelemetrySchemaDefinition {
 	spans: Record<string, TelemetrySpanDefinition>;
 }
 
-/** Typed identity helper for serializable telemetry schema data. */
+/**
+ * EN: Preserve schema literals for compile-time inference. This identity function does not install runtime
+ * validation, collect spans, or enforce declared parent relationships.
+ *
+ * ZH: 保留 schema 字面量以供编译期推导。此恒等函数不会安装运行时验证、采集 span，也不会执行声明的父子关系约束。
+ */
 export function defineTelemetrySchema<const T extends TelemetrySchemaDefinition>(schema: T): T {
 	return schema;
 }
@@ -343,8 +354,10 @@ function bindTypedSpanStarter<Schemas extends TelemetrySchemaTuple>(
 }
 
 /**
- * Bind an explicit parent context to the combined span vocabulary of one or more schemas.
- * Schema values are used only for type inference; no runtime schema validation is performed.
+ * EN: Bind schema-derived types to an explicit runtime context. Child starters bind to the span supplied to
+ * the callback; schemas constrain TypeScript calls but are not read as runtime validators.
+ *
+ * ZH: 把 schema 推导出的类型绑定到显式运行时上下文。子级 starter 绑定回调收到的 span；schema 约束 TypeScript 调用，但不作为运行时验证器读取。
  */
 export function createTypedSpanStarter<const Schemas extends TelemetrySchemaTuple>(
 	telemetryContext: TelemetryContext,

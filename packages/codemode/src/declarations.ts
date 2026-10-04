@@ -98,9 +98,15 @@ export interface RenderDeclarationsOptions {
 }
 
 /**
- * Render TypeScript declarations for the script-visible API. Tools become members of
- * `declare const tools`, globals become `declare function` statements, and `ns.member` globals
- * members of `declare const ns`. Descriptions become doc comments; schemas become types.
+ * EN: Describe injected tools and globals as TypeScript for the model. Schemas shape documentation only;
+ * this renderer does not validate runtime tool arguments or results.
+ *
+ * ZH: 把注入的工具与全局函数描述为模型可读的 TypeScript 声明。schema 仅塑造文档；此渲染器不验证运行时工具参数或结果。
+ *
+ * EN: Tools become members of tools, plain globals become functions, and dotted globals become namespace
+ * members. Descriptions become documentation comments.
+ *
+ * ZH: 工具成为 tools 的成员，普通全局项成为函数，点分全局项成为命名空间成员；描述转换为文档注释。
  */
 export function renderDeclarations(options: RenderDeclarationsOptions): string {
 	const sections: string[] = [];
@@ -219,11 +225,16 @@ function union(types: string[]): string {
 }
 
 /**
- * Convert a JSON Schema to a TypeScript type expression: objects on one line (`{ a: string; b?: number; }`) with properties sorted by name,
- * or one property per line with `//` comments when a property has a description; `Array<T>` for
- * arrays. Local references (`#/$defs/...`, `#/definitions/...`) resolve against `schema`;
- * recursive and remote references render as `unknown`. A result longer than `maxChars` renders as
- * `unknown`.
+ * EN: Render a bounded schema description with sorted object properties and local reference expansion.
+ * Recursive, remote, unresolved, or over-budget forms fall back to unknown rather than generating unbounded
+ * declarations.
+ *
+ * ZH: 通过排序的对象属性与本地引用展开生成受限的类型描述。递归、远程、无法解析或超过预算的形式回退为 unknown，避免生成无限展开的声明。
+ *
+ * EN: Resolve local #/$defs and #/definitions references against the input schema. Render arrays as Array<T>
+ * and add property comments when descriptions exist; maxChars bounds the final expression.
+ *
+ * ZH: 相对输入 schema 解析本地 #/$defs 与 #/definitions 引用。数组表示为 Array<T>，有描述时补充属性注释；maxChars 限制最终表达式长度。
  */
 export function schemaToType(schema: CodemodeJsonSchema, options: { maxChars?: number } = {}): string {
 	const type = toType(schema, { root: schema, resolving: new Set(), expansions: 0 });

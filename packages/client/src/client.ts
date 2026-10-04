@@ -59,6 +59,12 @@ interface ActiveServiceListener {
 	ready: boolean;
 }
 
+/**
+ * EN: Own routed requests, attachment state, and service subscriptions for one server identity. Connection
+ * owns bytes and hello state; this layer matches responses and decodes Chord service updates.
+ *
+ * ZH: 为一个服务端标识管理路由请求、挂接状态与服务订阅。Connection 管理字节与握手状态；本层匹配响应并解码 Chord 服务更新。
+ */
 export class Client {
 	readonly #options: ClientOptions;
 	readonly #connection: Connection;
@@ -151,7 +157,13 @@ export class Client {
 		return () => this.#attachmentListeners.delete(listener);
 	}
 
-	/** Invoke one low-level protocol call against an explicit routed target. */
+	/**
+	 * EN: Invoke one Chord call against an explicit server or attachment target. Aborting rejects locally and
+	 * sends cancellation if the request was sent; its pending identity remains until a response or disconnect
+	 * consumes it.
+	 *
+	 * ZH: 向显式服务端或挂接目标调用一次 Chord 操作。取消会在本地拒绝，已发送请求还会发送取消消息；请求标识仍保留到响应或断开时才消费。
+	 */
 	request(target: RpcTarget, call: ServiceCall, signal?: AbortSignal): Promise<ServiceResult> {
 		return this.#request(target, call, signal);
 	}
@@ -169,6 +181,17 @@ export class Client {
 		}
 	}
 
+	/**
+	 * EN: Register the listener before requesting a snapshot. Buffer wire updates until the decoder is
+	 * hydrated, then decoded updates until start() lets the caller observe them after installing the snapshot.
+	 *
+	 * ZH: 在请求快照前先登记监听器。解码器建立初始状态前缓冲原始更新，之后继续缓冲已解码更新；调用者安装快照并调用 start() 后才开始通知。
+	 *
+	 * EN: Each listener has a Promise tail for ordered asynchronous delivery. Disposal removes registration,
+	 * conditionally unsubscribes the still-current target, then waits for deliveries already scheduled.
+	 *
+	 * ZH: 每个监听器都有 Promise 链以维持异步投递顺序。释放时移除注册，对仍有效的目标按需取消订阅，再等待已排入的投递完成。
+	 */
 	async subscribeService(
 		target: RpcTarget,
 		serviceId: string,
@@ -342,6 +365,12 @@ export class Client {
 		pending.resolve(message.result);
 	}
 
+	/**
+	 * EN: On disconnect, clear handshake and attachment state, reject pending requests, and drop service
+	 * registrations. Reconnecting does not replay requests or restore subscriptions automatically.
+	 *
+	 * ZH: 断开时清除握手与挂接状态、拒绝待处理请求，并移除服务注册。重新连接不会自动重放请求或恢复订阅。
+	 */
 	#handleConnectionStateChange(change: ConnectionStateChange): void {
 		if (change.state === "disconnected") {
 			this.#hello = undefined;
@@ -376,6 +405,12 @@ export class Client {
 		}
 	}
 
+	/**
+	 * EN: Permanently dispose this client and close its connection once. Reject pending work and clear listener
+	 * registries; this promise does not join every service callback that was previously scheduled.
+	 *
+	 * ZH: 永久释放客户端并关闭连接，重复调用复用结果。拒绝待处理工作并清除监听器集合；此 Promise 不会汇合此前排入的所有服务回调。
+	 */
 	dispose(): Promise<void> {
 		if (this.#disposePromise) return this.#disposePromise;
 		this.#disposed = true;
@@ -444,7 +479,12 @@ export class Client {
 	}
 }
 
-/** Adapts a lazily resolved routed client target to a Chord service transport. */
+/**
+ * EN: Adapt Client to a Chord transport, resolving the target at each operation. Snapshot activation maps
+ * to subscription start; request cancellation comes from the supplied execution context.
+ *
+ * ZH: 把 Client 适配为 Chord transport，在每次操作时解析目标。快照激活映射为订阅 start；请求取消来自传入的执行上下文。
+ */
 export function createClientServiceTransport(
 	client: Client,
 	getTarget: () => RpcTarget | undefined,

@@ -40,6 +40,13 @@ export interface ReplicatedStateDelivery {
 	readonly sequence: number;
 }
 
+/**
+ * EN: Expose contract-immutable revisions and independently serialized subscribers. Values can share
+ * storage with the producer. Public subscriptions may coalesce pending complete values, so their sequence
+ * numbers need not be contiguous.
+ *
+ * ZH: 暴露契约上不可变的版本，以及各自串行化的订阅者。值可能与生产者共享存储。公开订阅可以合并待投递的完整值，因此观察到的序号不一定连续。
+ */
 export interface ReplicatedState<T> {
 	/**
 	 * Contract-immutable value, or undefined until hydration. It is not frozen and may share containers with an
@@ -249,12 +256,11 @@ export interface ServiceSubscription {
 }
 
 /**
- * Pluggable wire boundary consumed by a remote service binding.
+ * EN: Transport-independent Chord boundary for calls and subscription snapshots/updates. The adapter must
+ * preserve strict JSON and snapshot/reset/update order, and owns framing, routing, encoding, and isolation
+ * copies.
  *
- * Implementations choose transport, framing, routing, and envelope encoding. Values crossing this
- * boundary must remain strict JSON. Chord does not clone values or require a particular application wire protocol;
- * adapters own serialization and any isolation copies they require.
- *
+ * ZH: Chord 中与传输无关的调用、订阅快照及更新边界。适配器必须保持严格 JSON 与快照、重置、更新的顺序，并负责分帧、路由、编码和隔离所需的复制。
  */
 export interface RemoteServiceTransport {
 	invoke(call: ServiceCall, context: Context): Promise<JsonValue | undefined>;

@@ -45,16 +45,22 @@ import {
 } from "./observation.ts";
 import { type LoadedDocument, Transaction, type TransactionHost, type TransactionScope } from "./transaction.ts";
 
-/** Open a Session kernel over one storage backend. */
+/**
+ * EN: Open a storage-backed transaction kernel without agent scheduling. Use Harness when committed tasks
+ * must also execute; Session alone owns the atomic mutation line and document observations.
+ *
+ * ZH: 打开基于存储的事务内核，不启动 Agent 调度。需要执行已提交任务时使用 Harness；Session 自身只管理原子变更队列与文档观察。
+ */
 export function createSession(storage: Storage): Session {
 	return new SessionImpl(storage);
 }
 
 /**
- * Session kernel: one mutation line, the loaded document tracker cache, and committed publication.
+ * EN: Serialize commit callbacks, preparation, storage settlement, adoption, and publication on one
+ * mutation line. Cached document values change only after storage succeeds; low-level commit listeners run
+ * synchronously after adoption and must not reenter Session operations.
  *
- * Only committed state is observable. Every commit callback, preparation, Storage settlement, adoption, and
- * publication enqueue runs while the line is held; listeners run later.
+ * ZH: 在同一变更队列上串行执行提交回调、准备、存储完成、采纳与发布。文档缓存仅在存储成功后改变；底层提交监听器在采纳后同步执行，不能重入 Session 操作。
  */
 export class SessionImpl implements Session {
 	readonly #storage: Storage;
@@ -87,9 +93,11 @@ export class SessionImpl implements Session {
 	}
 
 	/**
-	 * Internal commit exposing the concrete transaction and its internal operations, such as the reserved-ID root
-	 * bootstrap and task replacement. `scope` sets the default `tx.createTask()` conversation and the task attributed to
-	 * appended entries.
+	 * EN: Admit one transaction with optional conversation/task defaults, then queue it on the shared mutation
+	 * line. Callback failure aborts staged drafts; storage outcome uncertainty is handled separately by the
+	 * commit runner.
+	 *
+	 * ZH: 接纳一个事务及可选会话、任务默认值，再排入共享变更队列。回调失败会中止暂存 draft；存储结果不确定由提交执行器另行处理。
 	 */
 	commitWith<T>(change: (tx: Transaction) => T | Promise<T>, context: Context, scope?: TransactionScope): Promise<T> {
 		try {
@@ -347,6 +355,12 @@ export class SessionImpl implements Session {
 		});
 	}
 
+	/**
+	 * EN: Seal new admission immediately, let the pre-close hook join runtime work, then drain admitted commits
+	 * before closing storage. Caller cancellation stops waiting for close, not the cleanup already in progress.
+	 *
+	 * ZH: 立即关闭新准入入口，让关闭前 hook 汇合运行时工作，再排空已接纳提交后关闭存储。调用者取消只停止等待关闭，不停止已在进行的清理。
+	 */
 	close(context: Context): Promise<void> {
 		if (this.#closing === undefined) {
 			const cleanup = withoutAbortSignal(context);
@@ -401,6 +415,14 @@ export class SessionImpl implements Session {
 		});
 	}
 
+	/**
+	 * EN: Prepare every write before calling storage without the caller abort signal. After success, adopt
+	 * document revisions and publish. StorageRejected guarantees no committed effect and permits later commits;
+	 * another storage failure or adoption failure poisons this Session until reopen.
+	 *
+	 * ZH: 先准备全部写入，再移除调用者取消信号后调用存储。成功后采纳文档版本并发布。StorageRejected 保证没有提交效果，可继续后续事务；其他存储失败或采纳失败会使当前 Session
+	 * 失效，必须重新打开。
+	 */
 	async #runCommit<T>(
 		change: (tx: Transaction) => T | Promise<T>,
 		context: Context,

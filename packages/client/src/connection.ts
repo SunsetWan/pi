@@ -38,6 +38,12 @@ interface ConnectionOptions {
 	onStateChange(change: ConnectionStateChange): void;
 }
 
+/**
+ * EN: Own one transport attempt at a time. A monotonically increasing attempt id excludes late callbacks
+ * from older transports. Only a validated hello for the configured server transitions to connected.
+ *
+ * ZH: 同一时刻管理一次传输连接尝试。递增的尝试 ID 排除旧传输迟到的回调；只有通过验证且服务端标识匹配的 hello 才进入 connected。
+ */
 export class Connection {
 	readonly #options: ConnectionOptions;
 	readonly #maxFrameLength: number;
@@ -64,6 +70,12 @@ export class Connection {
 		return this.#maxFrameLength;
 	}
 
+	/**
+	 * EN: Start from disconnected, create a fresh decoder and handshake promise, then open the transport and
+	 * send hello. Calling while connecting or connected rejects instead of replacing live state.
+	 *
+	 * ZH: 从 disconnected 开始，创建新的解码器与握手 Promise，再打开传输并发送 hello。connecting 或 connected 期间调用会拒绝，不会替换活动状态。
+	 */
 	connect(): Promise<ServerHello> {
 		if (this.#lifecycle.state !== "disconnected") {
 			return Promise.reject(new DisconnectedError(`Client is already ${this.#lifecycle.state}`));
@@ -99,6 +111,12 @@ export class Connection {
 		this.#failAndClose(error);
 	}
 
+	/**
+	 * EN: Submit a frame only after the handshake. Both synchronous send failure and asynchronous rejection
+	 * fail the current transport; a late failure from an old transport cannot close its replacement.
+	 *
+	 * ZH: 只在握手完成后发送帧。同步发送失败与异步拒绝都会终止当前传输；旧传输的迟到失败不能关闭后续替代连接。
+	 */
 	send(frame: Uint8Array): void {
 		const lifecycle = this.#lifecycle;
 		if (lifecycle.state !== "connected") throw new DisconnectedError();

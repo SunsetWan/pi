@@ -184,10 +184,11 @@ type DocumentPlan = {
 };
 
 /**
- * Transaction for one Session commit callback.
+ * EN: Stage table records and document drafts for one Session commit. Public table reads must precede the
+ * first table write; document acquisitions follow their own tracked draft path. Every asynchronous Tx
+ * operation must settle before the callback returns.
  *
- * Every asynchronous operation is tracked so callback settlement can reject and drain unfinished work. Session calls
- * one settlement method, then either discards prepared changes or adopts them once after Storage succeeds.
+ * ZH: 为一次 Session 提交暂存表记录与文档 draft。公开表读取必须在首次表写入之前；文档获取有独立的 draft 路径。所有异步 Tx 操作必须在回调返回前完成。
  */
 export class Transaction implements Tx {
 	readonly #host: TransactionHost;
@@ -666,8 +667,11 @@ export class Transaction implements Tx {
 	}
 
 	/**
-	 * Seal after callback success, prepare every open change, and assemble the atomic batch.
-	 * Any failure aborts every change before Storage admission.
+	 * EN: Seal the transaction and reject unfinished Tx operations even if the callback returned successfully.
+	 * Prepare all document drafts, revoke their handles, and assemble one validated batch before storage
+	 * admission.
+	 *
+	 * ZH: 封闭事务；即使回调成功返回，只要还有未完成 Tx 操作就拒绝。准备全部文档 draft 并撤销句柄，在进入存储前组装一个经过验证的批次。
 	 */
 	async settleSuccess(): Promise<readonly StorageWrite[]> {
 		this.#sealed = true;
@@ -693,7 +697,13 @@ export class Transaction implements Tx {
 		this.#abortChanges();
 	}
 
-	/** Adopt every prepared change by pointer swap after Storage success and describe the publication. */
+	/**
+	 * EN: Install prepared immutable revisions only after storage reports success. Use precomputed plans so
+	 * adoption does not read storage; publish creation, migration, change, copy, and retirement with the
+	 * committed sequence.
+	 *
+	 * ZH: 仅在存储报告成功后安装准备好的不可变版本。使用预计算计划，使采纳阶段无需读取存储；按已提交序号发布创建、迁移、变更、复制与退役。
+	 */
 	adopt(seq: Seq): DocumentCommitChange[] {
 		const publications: DocumentCommitChange[] = [];
 		for (const plan of this.#plans) {
@@ -964,7 +974,13 @@ export class Transaction implements Tx {
 	}
 }
 
-/** Plan of one staged document: its record, content write, and prepared change. Retirement is decided later. */
+/**
+ * EN: Choose a base for new or migrated documents and deltas for changed existing documents. An unchanged
+ * draft writes nothing unless its stored schema version must advance; retirement is applied separately
+ * during assembly.
+ *
+ * ZH: 新建或迁移文档选择完整基础值，已存在且变更的文档选择增量。未变 draft 通常不写入，除非需要推进存储 schema 版本；退役在组装时单独处理。
+ */
 function planDocument(document: DocumentEntry): DocumentPlan | undefined {
 	const target = document.target;
 	if (target === undefined) return undefined;

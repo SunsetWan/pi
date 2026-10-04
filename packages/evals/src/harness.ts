@@ -67,6 +67,12 @@ export type PiCodingAgentHarnessWithOutput<TOutput extends JsonValue> = PiCoding
 	}) => TOutput | Promise<TOutput>;
 };
 
+/**
+ * EN: Require an explicit provider/model pair or complete environment defaults. There is no silent fallback
+ * model, so report identity can be compared with the predeclared experiment plan.
+ *
+ * ZH: 要求显式 provider、model 配对或完整环境默认值。不静默选择替代模型，使报告身份可以与预先声明的实验计划比较。
+ */
 export function resolveModelSelection(
 	explicitModel: PiCodingAgentModelSelection | undefined,
 	environment: { PI_PROVIDER?: string; PI_MODEL?: string } = process.env,
@@ -254,6 +260,13 @@ async function promptAgent(session: AgentSession, input: string, signal: AbortSi
 	return output ?? "";
 }
 
+/**
+ * EN: Check that the experiment variant changed documentation routing as intended while retaining the rules
+ * section. Hashing a prompt records its identity; this structural check verifies the intended treatment
+ * boundary.
+ *
+ * ZH: 检查实验变体按预期改变文档路由，同时保留规则区段。提示词哈希记录身份，此结构检查则验证预期的实验处理边界。
+ */
 export function verifySystemPrompt(
 	systemPrompt: string,
 	options: Pick<PiCodingAgentHarnessOptions, "name" | "expectedPiDocumentation">,
@@ -269,6 +282,13 @@ export function verifySystemPrompt(
 	return systemPrompt;
 }
 
+/**
+ * EN: Create an isolated workspace and AgentSession, run prompt/reload steps, capture transcript and usage,
+ * then collect the session artifact before cleanup. Preserve run and cleanup errors together; this path
+ * performs real model work when invoked.
+ *
+ * ZH: 创建隔离工作区与 AgentSession，执行 prompt 或 reload 步骤，收集对话与用量，并在清理前保存会话产物。同时保留运行与清理错误；调用该路径会实际执行模型请求。
+ */
 async function runPiCodingAgent<TOutput extends JsonValue>(
 	input: PiCodingAgentInput,
 	signal: AbortSignal | undefined,
@@ -520,6 +540,13 @@ export function createPiDocumentationEvalHarness<TOutput extends JsonValue>(
 export function createPiDocumentationEvalHarness(
 	options?: DocumentationHarnessOptions,
 ): Harness<PiCodingAgentInput, string>;
+/**
+ * EN: Require the isolated container identity and select the documentation treatment with a restricted
+ * default tool set. Evaluation grading remains outside model-authored output; Docker network access is
+ * still needed for provider traffic.
+ *
+ * ZH: 要求隔离容器身份，并选择文档变体与受限默认工具集合。评测打分不交给模型生成的输出控制；Provider 请求仍需要容器网络访问。
+ */
 export function createPiDocumentationEvalHarness<TOutput extends JsonValue>(
 	options: DocumentationHarnessOptions | DocumentationHarnessWithOutput<TOutput> = {},
 ) {

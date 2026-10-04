@@ -24,7 +24,13 @@ type StateDelivery<T> = {
 	readonly delivery: ReplicatedStateDelivery;
 };
 
-/** One public subscription, independent of producer and other subscriber progress. */
+/**
+ * EN: Serialize one subscriber without blocking other subscribers or the producer. At 100 pending
+ * deliveries, coalesce to the newest complete value while preserving an initial hydration that has not
+ * started. This is a count bound, not a byte bound.
+ *
+ * ZH: 串行处理一个订阅者，不阻塞其他订阅者或生产者。待投递达到 100 项后合并为最新完整值，同时保留尚未开始的首次初始化。此限制按条数计算，不是字节上限。
+ */
 class StateSubscriber<T> {
 	readonly #listener: StateListener<T>;
 	readonly #reportError: (error: Error) => void;
@@ -181,6 +187,12 @@ class ReplicatedStatePublisher<T> {
 	}
 }
 
+/**
+ * EN: Join Delta ownership and publication. A synchronous draft transaction prepares and adopts a revision,
+ * then publishes exact operations to internal listeners and complete values to public subscribers.
+ *
+ * ZH: 衔接 Delta 所有权与发布。同步 draft 事务先准备并采纳版本，再向内部监听器发布精确操作，向公开订阅者发布完整值。
+ */
 export class MutableReplicatedStateImpl<T extends object> implements MutableReplicatedState<T> {
 	readonly #tracker: Tracker<T>;
 	readonly #publisher: ReplicatedStatePublisher<T>;
@@ -199,6 +211,13 @@ export class MutableReplicatedStateImpl<T extends object> implements MutableRepl
 		return this.#tracker.value;
 	}
 
+	/**
+	 * EN: Abort the draft if the callback throws or returns a Promise. Adopt only after preparation succeeds;
+	 * publish only when operations exist. Listener failure occurs after adoption and therefore does not roll
+	 * back the committed value.
+	 *
+	 * ZH: 回调抛出或返回 Promise 时中止 draft。准备成功后才采纳，仅在存在操作时发布。监听器失败发生在采纳之后，因此不会回滚已经提交的值。
+	 */
 	change(context: Context, mutate: Parameters<MutableReplicatedState<T>["change"]>[1]): void {
 		if (this.#changing) throw new Error("Replicated state cannot be changed reentrantly from a change callback");
 		this.#changing = true;
@@ -320,7 +339,13 @@ class AttachedReplicatedStateImpl<T> implements AttachedReplicatedState<T> {
 	}
 }
 
-/** Attach a publication-only replicated state to one authoritative immutable source stream. */
+/**
+ * EN: Atomically capture the source attachment, initialize from its snapshot, then activate buffered
+ * frames. A cursor gap terminates this attachment; the adapter publishes supplied immutable revisions
+ * rather than applying their operations again.
+ *
+ * ZH: 原子获取来源挂接，以快照初始化，再激活缓冲帧。游标缺口会终止该挂接；适配器发布来源给出的不可变版本，不会再次应用操作。
+ */
 export function attachReplicatedStateSource<T>(
 	source: ReplicatedStateSource<T>,
 	options: ReplicatedStateSourceOptions = {},
@@ -340,7 +365,12 @@ export function attachReplicatedStateSource<T>(
 	}
 }
 
-/** A cold read-only state used by service consumers until a complete snapshot arrives. */
+/**
+ * EN: Start unready, hydrate from a base batch, then require contiguous operation sequences. Invalid
+ * operations or a sequence gap clear the replica; a later complete snapshot must restore readiness.
+ *
+ * ZH: 初始处于未就绪状态，从基础操作批次初始化，之后要求操作序号连续。无效操作或序号缺口会清空副本；必须由后续完整快照恢复就绪。
+ */
 export class ReplicatedStateReplica<T extends JsonValue = JsonValue> implements ReplicatedState<T> {
 	readonly #listeners = new Set<StateSubscriber<T>>();
 	readonly #reportError: (error: Error) => void;

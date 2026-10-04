@@ -2,6 +2,12 @@ import type { JsonValue } from "@earendil-works/chord";
 import Type, { type Static } from "typebox";
 import { Check } from "typebox/value";
 
+/**
+ * EN: Version of the outer routing protocol. Chord owns the grammar inside call, result, and update
+ * payloads. Peers must complete the hello exchange before sending service traffic.
+ *
+ * ZH: 外层路由协议的版本。call、result 和 update 内部的语法由 Chord 负责；双方完成 hello 握手后才能传输服务消息。
+ */
 export const PROTOCOL_VERSION = 8 as const;
 
 const IdSchema = Type.String({ minLength: 1 });
@@ -42,6 +48,12 @@ const SessionTargetSchema = StrictObject({
 	sessionId: IdSchema,
 	attachmentId: IdSchema,
 });
+/**
+ * EN: Address one attachment to a session on a specific server. The attachment id distinguishes a current
+ * attachment from an older attachment to the same session.
+ *
+ * ZH: 定位指定服务端上某次会话挂接。attachmentId 用于区分同一会话的当前挂接与旧挂接，避免旧请求落入新的挂接生命周期。
+ */
 export type SessionTarget = Static<typeof SessionTargetSchema>;
 const RpcTargetSchema = Type.Union([ServerTargetSchema, SessionTargetSchema]);
 export type RpcTarget = Static<typeof RpcTargetSchema>;
@@ -57,6 +69,12 @@ const CancelEnvelopeSchema = StrictObject({
 	id: IdSchema,
 	target: RpcTargetSchema,
 });
+/**
+ * EN: Carry request identity, routing target, and a JSON-compatible service call. The protocol validates
+ * this envelope; the receiving service layer validates the call grammar and arguments.
+ *
+ * ZH: 携带请求标识、路由目标和可表示为 JSON 的服务调用。协议层验证信封，接收端服务层验证内部调用语法与参数。
+ */
 export type RequestEnvelope = Static<typeof RequestEnvelopeSchema>;
 export type CancelEnvelope = Static<typeof CancelEnvelopeSchema>;
 export const ClientMessageSchema = Type.Union([ClientHelloSchema, RequestEnvelopeSchema, CancelEnvelopeSchema]);

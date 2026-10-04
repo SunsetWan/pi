@@ -9,11 +9,11 @@ const KITTY_SEQUENCE_PREFIX = "\x1b_G";
 const MAX_RENDER_WRITE_CHARS = 1024 * 1024;
 
 /**
- * Streams terminal output in 1 MiB chunks so a full render never forms one string large enough to exceed V8's limit.
+ * EN: Bound each terminal write to about 1,048,576 UTF-16 code units without splitting surrogate pairs.
+ * Callers still own synchronized-output markers and the final flush; this does not bound total retained UI
+ * lines.
  *
- * `append()` fills the current chunk and flushes it when full. Oversized input is split at chunk boundaries, preserving
- * surrogate pairs so each write remains valid UTF-16. Callers append synchronized-output begin/end sequences themselves;
- * the final `flush()` writes any remainder, including the end sequence.
+ * ZH: 把每次终端写入限制在约 1,048,576 个 UTF-16 代码单元内，并避免拆开代理对。调用者仍负责同步输出标记与最后 flush；此机制不限制保留的 UI 总行数。
  */
 class BoundedTerminalWriter {
 	private buffer = "";
@@ -120,7 +120,13 @@ export interface TuiMainScreenRenderState {
 	previousViewportTop: number;
 }
 
-/** TUI implementation that renders into the terminal's main screen and scrollback. */
+/**
+ * EN: Render into the main screen and scrollback while tracking previous lines, viewport origin, and the
+ * real hardware cursor. Logical content position and hardware cursor position differ after IME cursor
+ * placement.
+ *
+ * ZH: 渲染到主屏幕与滚动历史，同时跟踪旧行、视口起点及真实硬件光标。为输入法定位光标后，逻辑内容位置与硬件光标位置可能不同。
+ */
 export class TuiMainScreen extends TuiBase implements TUI {
 	readonly mode = "regular" as const;
 	private previousLines: string[] = [];
@@ -244,6 +250,13 @@ export class TuiMainScreen extends TuiBase implements TUI {
 		return this.deleteKittyImages(ids);
 	}
 
+	/**
+	 * EN: Build current lines, composite overlays, extract the cursor marker, then select full or differential
+	 * output. Width changes and changes above the previous viewport require a full redraw; ordinary changes
+	 * write only the affected range plus necessary cleanup.
+	 *
+	 * ZH: 构建当前行、合成浮层、提取光标标记，再选择完整或差分输出。宽度变化及旧视口上方的变更需要完整重绘；普通变更仅写受影响范围及必要清理。
+	 */
 	protected doRender(): void {
 		if (this.stopped) return;
 		const width = this.terminal.columns;

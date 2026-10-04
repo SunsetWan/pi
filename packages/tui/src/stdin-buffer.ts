@@ -275,8 +275,11 @@ export type StdinBufferEventMap = {
 };
 
 /**
- * Buffers stdin input and emits complete sequences via the 'data' event.
- * Handles partial escape sequences that arrive across multiple chunks.
+ * EN: Separate stdin chunk boundaries from input-sequence boundaries. Retain incomplete escape sequences,
+ * collect bracketed paste as one paste event, and use timeouts to resolve an ambiguous lone Escape or
+ * incomplete sequence.
+ *
+ * ZH: 分离 stdin 分块边界与输入序列边界。保留不完整转义序列，把括号粘贴收集为一个 paste 事件，并通过超时处理无法判定的独立 Escape 或不完整序列。
  */
 export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 	private buffer: string = "";
@@ -293,6 +296,13 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 		this.escapeTimeoutMs = options.escapeTimeout ?? DEFAULT_ESCAPE_TIMEOUT_MS;
 	}
 
+	/**
+	 * EN: Append input, handle paste boundaries first, then emit complete sequences and retain the suffix. A
+	 * lone Escape has a shorter timeout than a partial control sequence; paste waits for its explicit end
+	 * marker.
+	 *
+	 * ZH: 追加输入后优先处理粘贴边界，再发出完整序列并保留尾部。独立 Escape 的超时比部分控制序列短；粘贴则等待显式结束标记。
+	 */
 	public process(data: string | Buffer): void {
 		// Clear any pending timeout
 		if (this.timeout) {
@@ -407,6 +417,12 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 		this.emit("data", sequence);
 	}
 
+	/**
+	 * EN: Cancel the sequence timer and return the undecided suffix as one item. This is a timeout fallback
+	 * rather than proof of a complete escape sequence, and it does not flush an unfinished paste payload.
+	 *
+	 * ZH: 取消序列定时器，并把尚未判定的尾部作为一个元素返回。这是超时回退，不代表转义序列已经完整，也不会排空未完成的粘贴负载。
+	 */
 	flush(): string[] {
 		if (this.timeout) {
 			clearTimeout(this.timeout);

@@ -18,6 +18,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * EN: Validate a flat eval-set/case naming convention and reject duplicate case identities. Discovery must
+ * describe the same cohort in both documentation variants before execution is planned.
+ *
+ * ZH: 验证平面的评测集与案例命名约定，并拒绝重复案例标识。规划执行前，两种文档变体必须发现相同的案例集合。
+ */
 export function parseDiscoveredCases(value: unknown): DiscoveredEvalCase[] {
 	if (!Array.isArray(value)) throw new TypeError("Discovered eval cases must be an array.");
 	const identities = new Set<string>();
@@ -36,6 +42,12 @@ export function parseDiscoveredCases(value: unknown): DiscoveredEvalCase[] {
 	});
 }
 
+/**
+ * EN: Expand the fixed cohort into case, model, repetition, and documentation-variant arms. Alternate
+ * variant order by repetition to reduce order bias; the plan is recorded before any arm runs.
+ *
+ * ZH: 把固定案例集合展开为案例、模型、重复次数和文档变体组合。按重复轮次交替变体顺序以减少顺序偏差；任一实验分支运行前先记录完整计划。
+ */
 export function createTaskPlan(
 	cases: readonly DiscoveredEvalCase[],
 	model: string,

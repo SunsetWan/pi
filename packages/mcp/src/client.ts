@@ -150,6 +150,13 @@ function validateCallToolResult(value: unknown): CallToolResult {
 	return (value.content === undefined ? { ...value, content: [] } : value) as unknown as CallToolResult;
 }
 
+/**
+ * EN: Own MCP initialization, JSON-RPC request correlation, progress, and cancellation over an injected
+ * message transport. Transport errors are observations; closing the transport rejects pending requests and
+ * permanently closes this client.
+ *
+ * ZH: 在注入的消息传输上管理 MCP 初始化、JSON-RPC 请求匹配、进度与取消。传输错误先作为通知；传输关闭才会拒绝待处理请求，并永久关闭当前客户端。
+ */
 export class McpClient {
 	readonly options: Readonly<McpClientOptions>;
 	private state: ClientState = "idle";
@@ -199,6 +206,12 @@ export class McpClient {
 		return this.protocolVersionValue;
 	}
 
+	/**
+	 * EN: Register handlers before starting transport, send initialize, validate the negotiated version, then
+	 * send initialized before entering connected. Any setup failure closes this one-use client.
+	 *
+	 * ZH: 在启动传输前登记处理函数，发送 initialize、验证协商版本，再发送 initialized 后进入 connected。准备失败会关闭这个只能初始化一次的客户端。
+	 */
 	async connect(transport: McpTransport): Promise<InitializeResult> {
 		if (this.state !== "idle") throw new Error(`Cannot connect MCP client in ${this.state} state`);
 		this.state = "connecting";
@@ -373,6 +386,12 @@ export class McpClient {
 		throw new Error(`MCP ${method} exceeded ${MAX_LIST_PAGES} pages`);
 	}
 
+	/**
+	 * EN: Return a validated tool-result envelope. JSON-RPC failure rejects the request, but a tool result with
+	 * isError is still a resolved result that the caller must inspect.
+	 *
+	 * ZH: 返回经过验证的工具结果信封。JSON-RPC 失败会拒绝请求，但带 isError 的工具结果仍是正常完成值，需要调用者检查。
+	 */
 	async callTool(
 		name: string,
 		args?: Record<string, unknown>,
@@ -391,6 +410,13 @@ export class McpClient {
 		await transport?.close();
 	}
 
+	/**
+	 * EN: Register request identity, timeout, abort listener, and optional progress token before send.
+	 * Initialization is special: protocol cancellation is suppressed for initialize, while ordinary request
+	 * aborts notify the server.
+	 *
+	 * ZH: 发送前登记请求标识、超时、取消监听器和可选进度 token。初始化有特殊规则：initialize 不发送协议取消，普通请求取消则通知服务端。
+	 */
 	private async requestInternal(
 		method: string,
 		params: Record<string, unknown> | undefined,
@@ -528,6 +554,12 @@ export class McpClient {
 		}
 	}
 
+	/**
+	 * EN: Find a pending request by its progress token and renew its timeout before notifying the callback.
+	 * This is an inactivity timeout, so progress can extend total request duration.
+	 *
+	 * ZH: 通过进度 token 找到待处理请求，在通知回调前续期超时。这是无进展超时，因此持续进度可以延长请求总时长。
+	 */
 	private handleProgress(params: unknown): void {
 		if (!isObject(params) || !isJsonRpcId(params.progressToken) || typeof params.progress !== "number") return;
 		const requestId = this.progressRequests.get(params.progressToken);
@@ -587,7 +619,12 @@ export class McpClient {
 		this.markClosed(new McpConnectionClosedError());
 	}
 
-	/** Idempotent: rejects in-flight requests, aborts server requests we are serving, and flips the state. */
+	/**
+	 * EN: Reject pending outgoing requests, abort incoming handlers, and notify close listeners once. The
+	 * closed state is terminal; use a new client for a new initialization.
+	 *
+	 * ZH: 拒绝待处理的外发请求、取消正在处理的入站请求，并仅通知一次关闭监听器。closed 是终态；重新初始化需要新客户端。
+	 */
 	private markClosed(error: Error): void {
 		const wasClosed = this.state === "closed";
 		this.state = "closed";

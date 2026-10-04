@@ -31,6 +31,12 @@ interface SessionRouterOptions<TMetadata extends SessionMetadata> {
 	reportError: (error: unknown) => void;
 }
 
+/**
+ * EN: Share one hosted session per id while giving each client its own attachment lease. Client admission
+ * is serialized, but admitted service calls can remain in flight together.
+ *
+ * ZH: 同一 ID 共享一个已承载会话，而每个客户端持有独立挂接租约。客户端操作的准入串行化，获准的服务调用仍可同时进行。
+ */
 export class SessionRouter<TMetadata extends SessionMetadata = SessionMetadata> {
 	private readonly options: SessionRouterOptions<TMetadata>;
 	private readonly hostedSessions = new Map<string, HostedSession>();
@@ -143,6 +149,13 @@ export class SessionRouter<TMetadata extends SessionMetadata = SessionMetadata> 
 		if (closeErrors.length > 0) throw new AggregateError(closeErrors, "Failed to close routed Sessions");
 	}
 
+	/**
+	 * EN: Chain attachment changes and request admission per client. Catch the prior tail so one failure does
+	 * not poison future operations; an admitted call returns its result promise inside an object to release
+	 * this queue early.
+	 *
+	 * ZH: 按客户端串接挂接变更与请求准入。捕获前一项失败，避免队列永久失效；获准调用把结果 Promise 包装在对象中返回，使准入队列可以提前继续。
+	 */
 	private runForClient<T>(client: object, operation: () => Promise<T>): Promise<T> {
 		const previous = this.clientOperations.get(client) ?? Promise.resolve();
 		const result = previous.catch(() => {}).then(operation);
@@ -221,6 +234,12 @@ export class SessionRouter<TMetadata extends SessionMetadata = SessionMetadata> 
 		void result.then(remove, remove);
 	}
 
+	/**
+	 * EN: Reject calls unless session id and attachment id match the current client lease. Switching away and
+	 * back creates a new attachment, so an old route stays invalid even for the same session.
+	 *
+	 * ZH: 只有会话 ID 与挂接 ID 同时匹配客户端当前租约才接受调用。切走再切回会创建新挂接，因此旧路由即使指向相同会话也继续失效。
+	 */
 	private requireAttachment(client: object, target: RpcTarget): ClientAttachment {
 		if (this.options.isClosing() || this.disconnectedClients.has(client)) throw new ServerDrainingError();
 		if (!("sessionId" in target)) throw new SessionNotAttachedError();
@@ -231,6 +250,12 @@ export class SessionRouter<TMetadata extends SessionMetadata = SessionMetadata> 
 		return attachment;
 	}
 
+	/**
+	 * EN: Reuse one release promise. Wait for admitted operations, release the lease, and clear ownership in
+	 * finally even if cleanup fails. Releasing the last attachment does not itself close the hosted session.
+	 *
+	 * ZH: 复用同一个释放 Promise。先等待已获准操作，再释放租约；即使清理失败，也在 finally 中清除归属。最后一个挂接被释放本身并不会关闭已承载会话。
+	 */
 	private releaseAttachment(attachment: ClientAttachment, context: Context, publish = true): Promise<void> {
 		attachment.releasing ??= (async () => {
 			const errors: unknown[] = [];
@@ -259,6 +284,12 @@ export class SessionRouter<TMetadata extends SessionMetadata = SessionMetadata> 
 		}
 	}
 
+	/**
+	 * EN: Deduplicate concurrent session opens with a shared pending promise and remove that entry after
+	 * settlement. A failed open can therefore be retried by a later attachment.
+	 *
+	 * ZH: 通过共享待完成 Promise 合并并发会话打开，并在完成后移除该条目。因此打开失败后，后续挂接仍可重试。
+	 */
 	private async acquire(sessionId: string, context: Context): Promise<HostedSession> {
 		const existing = this.hostedSessions.get(sessionId);
 		if (existing) return existing;

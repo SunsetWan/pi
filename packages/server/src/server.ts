@@ -43,6 +43,13 @@ const DEFAULT_HANDSHAKE_TIMEOUT_MS = 5_000;
 const MAX_UINT32 = 0xffff_ffff;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
+/**
+ * EN: Host byte listeners and route service calls to server services or attached sessions. This layer owns
+ * hello state, request cancellation, and per-subscription encoders; the supplied host owns application
+ * sessions.
+ *
+ * ZH: 承载字节监听器，并把服务调用路由到服务端服务或已挂接会话。本层管理握手状态、请求取消与每个订阅的编码器，应用会话由注入的 host 管理。
+ */
 export class Server<TMetadata extends SessionMetadata = SessionMetadata> {
 	readonly serverId: string;
 	/** Resolves after shutdown, or rejects when listener or routed-Session cleanup fails. */
@@ -133,6 +140,12 @@ export class Server<TMetadata extends SessionMetadata = SessionMetadata> {
 		}
 	}
 
+	/**
+	 * EN: Allocate independent protocol state and a handshake deadline for a transport. Data arriving while
+	 * hello setup is pending waits for that handshake; malformed traffic terminates only this connection.
+	 *
+	 * ZH: 为传输分配独立协议状态与握手截止时间。hello 准备期间到达的数据等待握手完成；无效数据会终止当前连接。
+	 */
 	accept(connection: ByteConnection): ByteConnectionHandler {
 		if (this.closing) {
 			void this.closeConnection(connection);
@@ -259,6 +272,12 @@ export class Server<TMetadata extends SessionMetadata = SessionMetadata> {
 		});
 	}
 
+	/**
+	 * EN: Check the protocol version, acquire per-client server services, and send hello before marking ready.
+	 * If closure races with acquisition, release the newly acquired services rather than publishing them.
+	 *
+	 * ZH: 检查协议版本、获取客户端专属服务，发送 hello 后才标记 ready。若关闭与获取资源交错，释放新获得的服务，不再发布到连接状态。
+	 */
 	private async finishHandshake(state: ConnectionState, hello: ClientHello): Promise<void> {
 		if (!isSupportedProtocolVersion(hello.version)) {
 			await this.failProtocol(state, {
@@ -303,6 +322,17 @@ export class Server<TMetadata extends SessionMetadata = SessionMetadata> {
 		}
 	}
 
+	/**
+	 * EN: Validate the call and register an abort controller before routing. Subscription calls buffer updates
+	 * until the response snapshot has established the state encoder, then flush them in order.
+	 *
+	 * ZH: 验证调用并在路由前登记取消控制器。订阅请求先缓冲更新，等响应快照建立状态编码器后再按顺序发送。
+	 *
+	 * EN: Requests can run concurrently. A cancel must match both request id and target; cancellation signals
+	 * the handler and does not undo effects that it already committed.
+	 *
+	 * ZH: 请求可以并发运行。取消消息必须同时匹配请求 ID 与目标；取消只向处理函数发信号，不会撤销已经提交的效果。
+	 */
 	private async handleRequest(state: ConnectionState, envelope: RequestEnvelope): Promise<void> {
 		if (state.activeRequests.has(envelope.id)) {
 			await this.sendMessage(state, {
@@ -414,6 +444,12 @@ export class Server<TMetadata extends SessionMetadata = SessionMetadata> {
 		this.disconnect(connection);
 	}
 
+	/**
+	 * EN: Invalidate protocol state, abort active requests, clear codecs, and start asynchronous
+	 * attachment/service release. Connection removal and resource-release completion are separate moments.
+	 *
+	 * ZH: 使协议状态失效，取消活动请求、清除编解码器，并启动异步挂接与服务释放。连接移除和资源释放完成是两个时刻。
+	 */
 	private disconnect(connection: ConnectionState): void {
 		if (connection.disconnected) return;
 		connection.disconnected = true;

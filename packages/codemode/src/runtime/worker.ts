@@ -49,6 +49,13 @@ function describeException(error: JSException): string {
 	return JSON.stringify({ name: error.name, message: error.message, stack: stack ? `${head}\n${stack}` : head });
 }
 
+/**
+ * EN: Create an isolated VM and a primitive-only bridge, install the prelude, then run the async script
+ * body. Host results settle VM promises and drain jobs; stalled detection rejects a wait that no pending
+ * host call can resume.
+ *
+ * ZH: 创建隔离 VM 与只传递基础值的桥接，安装 prelude，再运行异步脚本体。宿主结果完成 VM Promise 并排空任务；停滞检查会拒绝不存在待处理宿主调用可唤醒的等待。
+ */
 async function main(data: WorkerData): Promise<void> {
 	const interrupt = new Int32Array(data.interrupt);
 	const vm = await QuickJS.create({

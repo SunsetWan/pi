@@ -114,6 +114,12 @@ export function retargetMouseEvent(event: TuiMouseEvent, target: TuiMouseDispatc
 	};
 }
 
+/**
+ * EN: Render terminal lines for a supplied column width and invalidate any cached layout when needed. Width
+ * means visible terminal cells, not string length; input and mouse support are optional capabilities.
+ *
+ * ZH: 按给定列宽渲染终端行，并在必要时使缓存布局失效。宽度指终端可见单元，不是字符串长度；键盘和鼠标处理是可选能力。
+ */
 export interface Component {
 	/**
 	 * Render the component to lines for the given viewport width
@@ -492,6 +498,12 @@ export function isViewportTUI(tui: TUI): tui is ViewportTUI {
 	return (tui as Partial<ViewportTUI>)[VIEWPORT_TUI] === true;
 }
 
+/**
+ * EN: Own focus, overlays, terminal replies, and render scheduling shared by screen implementations.
+ * Components supply lines; concrete renderers own viewport and terminal-output state.
+ *
+ * ZH: 管理各屏幕实现共享的焦点、浮层、终端应答和渲染调度。组件提供文本行，具体渲染器管理视口与终端输出状态。
+ */
 export abstract class TuiBase extends Container implements TUI {
 	abstract readonly mode: TuiMode;
 	public terminal: Terminal;
@@ -987,6 +999,13 @@ export abstract class TuiBase extends Container implements TUI {
 		this.doRender();
 	}
 
+	/**
+	 * EN: Coalesce ordinary invalidations onto a timer with a minimum 16 ms render interval. A forced request
+	 * resets render state and uses the immediate next-tick path; this scheduling policy is not a measured
+	 * frame-rate guarantee.
+	 *
+	 * ZH: 把普通失效请求合并到至少间隔 16 ms 的定时渲染。强制请求会重置渲染状态并走下一事件轮次的立即路径；该调度策略不代表实测帧率保证。
+	 */
 	requestRender(force = false): void {
 		if (force) {
 			this.resetRenderState();
@@ -998,6 +1017,12 @@ export abstract class TuiBase extends Container implements TUI {
 		process.nextTick(() => this.scheduleRender());
 	}
 
+	/**
+	 * EN: Preempt a throttled render for latency-sensitive input. Deduplicate next-tick callbacks and cancel a
+	 * timer again at dispatch because an earlier scheduled callback may have recreated it.
+	 *
+	 * ZH: 为延迟敏感的输入抢占节流渲染。合并下一事件轮次的回调，并在真正派发时再次取消定时器，因为更早排入的回调可能重新创建它。
+	 */
 	private requestImmediateRender(): void {
 		this.cancelRenderTimer();
 		this.renderRequested = true;
@@ -1041,6 +1066,13 @@ export abstract class TuiBase extends Container implements TUI {
 		}, delay);
 	}
 
+	/**
+	 * EN: Consume terminal reports, run input interceptors, repair overlay focus, then send accepted input to
+	 * the focused component. Components opt in to key-release events; handled keyboard input requests an
+	 * immediate render.
+	 *
+	 * ZH: 先消费终端报告，执行输入拦截器并修复浮层焦点，再把可接受输入交给焦点组件。按键释放默认过滤，组件可选择接收；键盘处理后请求立即渲染。
+	 */
 	private handleTerminalInput(data: string): void {
 		if (this.consumeTerminalColorResponse(data)) {
 			return;
@@ -1335,7 +1367,12 @@ export abstract class TuiBase extends Container implements TUI {
 		}
 	}
 
-	/** Composite all overlays into content lines (sorted by focusOrder, higher = on top). */
+	/**
+	 * EN: Render visible overlays in focus order, compute their current bounds, and composite them before line
+	 * comparison. Padding uses current content and terminal size rather than the historical high-water mark.
+	 *
+	 * ZH: 按焦点顺序渲染可见浮层、计算当前边界，并在线比较前合成。填充使用当前内容与终端大小，不沿用历史最大行数。
+	 */
 	protected compositeOverlays(lines: string[], termWidth: number, termHeight: number): string[] {
 		if (this.overlayStack.length === 0) {
 			this.renderedOverlayLayouts = [];

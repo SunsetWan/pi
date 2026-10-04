@@ -336,7 +336,12 @@ type FacetProvision =
 			connectRemote(provider: RemoteServiceProvider): void;
 	  };
 
-/** Private lifecycle and dependency kernel behind the atomic host entry point. */
+/**
+ * EN: Own one graph of facet lifecycles and stable service slots. Setup is synchronous and declares shape;
+ * activation runs only after the whole graph is valid and required service bindings are ready.
+ *
+ * ZH: 管理一张 facet 生命周期图及稳定服务槽位。setup 同步声明结构；只有完整依赖图合法且必要服务绑定已就绪后，才进入激活。
+ */
 export class FacetKernel {
 	readonly #initialFacets: readonly Facet[];
 	readonly #serviceSources: readonly RemoteServiceSource[];
@@ -385,6 +390,12 @@ export class FacetKernel {
 		record.lifecycle.prepared();
 	}
 
+	/**
+	 * EN: Collect every declaration before validating dependencies, assemble and hydrate service bindings, then
+	 * activate providers before consumers. Any startup error tears down the partially created graph.
+	 *
+	 * ZH: 收集全部声明后验证依赖，组装并初始化服务绑定，再按提供者先于消费者的顺序激活。启动任一步失败都会清理部分创建的图。
+	 */
 	async activate(): Promise<void> {
 		const records: FacetRuntime[] = [];
 		try {
@@ -420,6 +431,13 @@ export class FacetKernel {
 		}
 	}
 
+	/**
+	 * EN: Stage replacements with the same required/provided service shape and activate them while old
+	 * providers remain routed. Replace singleton targets, retire old facets, then connect keyed instances.
+	 * Failure after cutover aborts the host instead of claiming rollback.
+	 *
+	 * ZH: 暂存服务需求与提供结构相同的替代项，在旧提供者仍接收调用时激活候选项。随后替换单例目标、释放旧 facet，再连接 keyed 实例。切换后的失败会终止 host，不宣称已回滚。
+	 */
 	async reload(facets: readonly Facet[]): Promise<void> {
 		if (this.#phase !== "active") throw new Error(`Facet host cannot reload while ${this.#phase}`);
 		const ids = facets.map(({ id }) => id);
@@ -805,6 +823,13 @@ async function disposeFacetRecords(records: readonly FacetRuntime[]): Promise<un
 	return errors;
 }
 
+/**
+ * EN: Reject missing, duplicate, and mode-mismatched providers before scheduling activation. External
+ * sources satisfy edges without becoming local facet nodes; local cycles are rejected by topological
+ * ordering.
+ *
+ * ZH: 在安排激活前拒绝缺失、重复及模式不匹配的提供者。外部来源满足依赖但不成为本地 facet 节点；拓扑排序会拒绝本地依赖环。
+ */
 function validateFacets(
 	records: readonly FacetShape[],
 	externalServices: ReadonlyMap<string, { readonly mode: ServiceMode }>,

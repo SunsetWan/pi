@@ -18,7 +18,12 @@ import type {
 	Service,
 } from "./types.ts";
 
-/** Create an active host for one complete set of facets. */
+/**
+ * EN: Activate a complete facet graph before exposing its frozen host facade. Setup declarations,
+ * dependency validation, binding readiness, and activation live in FacetKernel.
+ *
+ * ZH: 完整 facet 图激活后才暴露冻结的 host 外观。声明收集、依赖验证、绑定就绪与激活顺序都由 FacetKernel 实现。
+ */
 export async function createFacetHost(options: FacetOptions): Promise<FacetHost> {
 	const kernel = new FacetKernel(options);
 	await kernel.activate();
@@ -77,6 +82,12 @@ export function defineService<T>(
 		? readonly [options: never]
 		: readonly [options?: { readonly local?: false }]
 ): Service<T>;
+/**
+ * EN: Create a stable service token after checking its namespace. Local services permit arbitrary
+ * JavaScript contracts; remotely exposed services must satisfy the separate JSON and method/state contract.
+ *
+ * ZH: 检查命名空间后创建稳定服务 token。本地服务允许任意 JavaScript 契约；远程暴露服务还必须满足独立的 JSON 与方法、状态契约。
+ */
 export function defineService(id: string, options?: { readonly local?: boolean }): Service<unknown> {
 	if (id.length === 0) throw new TypeError("Service ID must not be empty");
 	// TODO: check if the reserved namespace should be part of Chord.
@@ -93,8 +104,11 @@ export function replicatedState<T>(
 	options?: ReplicatedStateSourceOptions,
 ): AttachedReplicatedState<T>;
 /**
- * Create authoritative state by taking immutable ownership of an alias-free strict-JSON root.
- * The caller must not mutate `initial` after this call.
+ * EN: Take immutable ownership of an alias-free strict-JSON root. The object is not frozen or defensively
+ * copied; callers must stop mutating transferred and published values and make changes through the draft
+ * API.
+ *
+ * ZH: 接收无共享别名的严格 JSON 根对象，并取得不可变所有权。对象不会被冻结或防御性复制；调用者必须停止修改移交和已发布的值，改用 draft API 变更。
  */
 export function replicatedState<T extends object>(initial: T): MutableReplicatedState<T>;
 export function replicatedState(

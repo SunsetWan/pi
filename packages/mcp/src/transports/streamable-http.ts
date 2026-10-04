@@ -32,6 +32,12 @@ export interface ConsumeSseOptions {
 	onRetry?(delayMs: number): void;
 }
 
+/**
+ * EN: Assemble SSE fields across arbitrary byte chunks with an event-size bound. Track id and retry fields
+ * even without data, because they can establish a resumption cursor before a JSON-RPC response exists.
+ *
+ * ZH: 跨任意字节分块组装 SSE 字段，并限制事件大小。即使没有 data 也跟踪 id 与 retry，因为 JSON-RPC 响应出现前就可能建立续传游标。
+ */
 export async function consumeSseStream(stream: ReadableStream<Uint8Array>, options: ConsumeSseOptions): Promise<void> {
 	const reader = stream.getReader();
 	const decoder = new TextDecoder();
@@ -185,6 +191,12 @@ interface StreamCursor {
 	received: boolean;
 }
 
+/**
+ * EN: Own HTTP session headers and independent SSE cursors, not MCP request promises. POST can return JSON
+ * or a response stream; the optional server GET stream starts only after initialized is sent.
+ *
+ * ZH: 管理 HTTP 会话头和独立 SSE 游标，不持有 MCP 请求 Promise。POST 可以返回 JSON 或响应流；可选服务端 GET 流仅在发送 initialized 后启动。
+ */
 export class StreamableHttpTransport extends TransportEvents implements McpTransport {
 	readonly url: URL;
 	readonly options: Readonly<StreamableHttpTransportOptions>;
@@ -275,8 +287,10 @@ export class StreamableHttpTransport extends TransportEvents implements McpTrans
 	}
 
 	/**
-	 * Fetch with auth headers. A 401 (or a 403 asking for more scope) is handed to the auth provider
-	 * once, and the request is retried with whatever credentials it left behind.
+	 * EN: On the first authorization challenge, invoke the injected auth provider and retry once with refreshed
+	 * headers. This transport neither opens a browser nor selects a credential store.
+	 *
+	 * ZH: 首次遇到授权挑战时调用注入的认证提供者，并用更新的请求头重试一次。传输本身不打开浏览器，也不选择凭据存储位置。
 	 */
 	private async authorizedFetch(
 		method: "GET" | "POST",
@@ -354,9 +368,11 @@ export class StreamableHttpTransport extends TransportEvents implements McpTrans
 	}
 
 	/**
-	 * Read the SSE stream answering one request. When the stream ends or breaks before the response
-	 * arrives and the server assigned event IDs, resume it with GET and `Last-Event-ID`, as the
-	 * server may close response streams at will. Otherwise only this request fails.
+	 * EN: Resume an unanswered response stream with GET and Last-Event-ID only when a cursor exists and the
+	 * failure is retryable. Exhaustion emits a synthetic error response for this request rather than closing
+	 * all client requests.
+	 *
+	 * ZH: 只有存在游标且失败可重试时，才通过 GET 与 Last-Event-ID 恢复尚未答复的响应流。重试耗尽会为当前请求发出合成错误响应，不会关闭所有客户端请求。
 	 */
 	private async consumeResponseStream(body: ReadableStream<Uint8Array>, requestId: JsonRpcId): Promise<void> {
 		const cursor: StreamCursor = { lastEventId: undefined, retryMs: undefined, received: false };

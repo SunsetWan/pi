@@ -157,19 +157,17 @@ export type TaskSchedulerOptions = {
 };
 
 /**
- * Durable task scheduler of one Harness.
+ * EN: Mirror committed live tasks and schedule their phase handlers off the Session mutation line. Reserve,
+ * abort-mark, transition, and finalize tasks through serialized commits. Ownership determines abort
+ * cascades and delays terminal outcomes while ordinary owned work remains live.
  *
- * `#live` mirrors every committed non-terminal task record: pending, running, waiting, and completing. The synchronous
- * commit listener updates it on the Session line, so code running on the line reads exactly the committed state from it.
+ * ZH: 镜像已提交的活动任务，在 Session 变更队列之外调度阶段处理函数。任务预留、取消标记、迁移和结束都通过串行提交完成。所有权决定取消级联，并在普通子工作仍活动时延迟任务终态。
  *
- * Tasks and conversations form one ownership tree (spec §5.5): a task's parent is its owner task, or its conversation;
- * a conversation's parent is its owner task, if any. Walks up that tree decide cascades, idle scopes, and whether a
- * task's ordinary owned work is live, which holds its outcome as `completing` and delays its abort handler.
+ * EN: The synchronous commit listener keeps the live mirror current on the Session line. Each invocation
+ * ends in a serialized step; a runtime commit queued before that decision can land, while one after it is
+ * rejected. Handlers and joins run off the line.
  *
- * Invariant: every task transition is decided and written by one callback serialized on the Session line. That covers
- * reservation, marks, runtime commits, finalization, and the synchronous step before each phase, which applies the
- * precedence rules and writes a fault or handover. Handlers and joins run off the line. An invocation ends inside the
- * step that decides its end, so a runtime commit it queued either lands before that decision or is rejected.
+ * ZH: 同步提交监听器在 Session 队列上保持活动镜像最新。每次调用在串行步骤中结束；在该决定前排入的运行时提交可以落地，之后排入的会被拒绝。处理函数与汇合操作在队列外运行。
  */
 export class TaskScheduler {
 	readonly #session: SessionImpl;
@@ -227,7 +225,12 @@ export class TaskScheduler {
 		this.#context = options.context;
 	}
 
-	/** Load live tasks and change surviving `running` tasks back to `pending`. Dispatches nothing. */
+	/**
+	 * EN: Load live tasks and commit running-to-pending recovery without dispatching handlers. Reconciliation
+	 * also repairs abort marks and held outcomes implied by durable ownership records after a crash.
+	 *
+	 * ZH: 加载活动任务，提交 running 到 pending 的恢复，但不派发处理函数。协调过程还会在崩溃后依据持久化所有权记录修复取消标记与暂存结果。
+	 */
 	async open(context: Context): Promise<void> {
 		this.#session.subscribeCommits((publication) => this.#observe(publication));
 		this.#session.subscribeClose(() => this.#seal());
@@ -695,7 +698,13 @@ export class TaskScheduler {
 		}
 	}
 
-	/** Reserve every eligible task in one commit; orphan abort-marked tasks no definition can take. */
+	/**
+	 * EN: Commit running reservations before starting handlers. Skip unresolved definitions and live
+	 * dependencies, reserve each task once, and release in-memory reservations if the storage commit fails.
+	 * An abort-marked task whose definition cannot resolve ends as orphaned.
+	 *
+	 * ZH: 启动处理函数前先提交 running 预留。跳过未解析定义及仍有依赖的任务，每个任务只预留一次；存储提交失败时释放内存预留。被标记取消且定义无法解析的任务以 orphaned 结束。
+	 */
 	async #reserve(): Promise<Reservation[]> {
 		const reservations: Reservation[] = [];
 		try {
@@ -849,7 +858,12 @@ export class TaskScheduler {
 		})();
 	}
 
-	/** Run phase handlers, each preceded by a step that decides on the line whether the invocation continues. */
+	/**
+	 * EN: Before each phase, decide continuation on the mutation line; run the phase outside it. A handler must
+	 * commit progress, waiting, or an outcome. Returning with an unchanged checkpoint faults the task.
+	 *
+	 * ZH: 每个阶段前在变更队列上决定是否继续，再到队列外执行阶段。处理函数必须提交进展、等待状态或结果；检查点不变便返回会使任务 faulted。
+	 */
 	async #run(reservation: Reservation): Promise<void> {
 		const invocation = reservation.invocation;
 		const state = { task: reservation.task, snapshot: reservation.snapshot, reported: undefined as ReportedTask };
@@ -973,9 +987,11 @@ export class TaskScheduler {
 	}
 
 	/**
-	 * Replace a running task's state with what it committed. A terminal state holds as `completing` while ordinary owned
-	 * work is live, judged on the commit's candidates, so work the same commit creates below the task counts. A wait is
-	 * validated first.
+	 * EN: Validate waits and convert a requested terminal state to completing while owned work is live. The
+	 * final terminal commit occurs only after that work settles; ending a handler is not the same as ending its
+	 * durable task.
+	 *
+	 * ZH: 验证等待关系，并在仍有活动子工作时把请求的终态转换为 completing。只有这些工作完成后才提交最终终态；处理函数结束不等于持久任务结束。
 	 */
 	async #commitState(
 		tx: Transaction,

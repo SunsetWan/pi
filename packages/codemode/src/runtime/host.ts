@@ -79,9 +79,15 @@ interface ExecutionOptions {
 }
 
 /**
- * One script run in its own worker and QuickJS VM. A fresh worker per run keeps
- * termination simple: a runaway script, including one that only spins the
- * microtask queue, is killed with `terminate()` and cannot poison a later run.
+ * EN: Own one worker, deadline, output buffer, and set of pending host calls. The worker runs a fresh
+ * QuickJS VM, while injected tool implementations run here with a cooperative abort signal.
+ *
+ * ZH: 管理一次执行的 worker、截止时间、输出缓冲和待处理宿主调用。worker 运行新的 QuickJS VM，注入工具则在这里执行，并收到协作式取消信号。
+ *
+ * EN: A fresh worker makes termination independent of later runs, including when a script only spins the
+ * microtask queue.
+ *
+ * ZH: 独立 worker 使终止不会影响后续运行，即使脚本只在微任务队列中持续循环。
  */
 class Execution {
 	readonly promise: Promise<CodemodeResult>;
@@ -207,6 +213,13 @@ class Execution {
 		this.finish(undefined, message.value === undefined ? undefined : JSON.parse(message.value), message.writes);
 	}
 
+	/**
+	 * EN: Resolve an injected tool/global, decode its JSON argument, and return a JSON result or an error
+	 * message. Tool calls enter the call log; globals do not. Late replies after execution settlement are
+	 * ignored.
+	 *
+	 * ZH: 查找注入的工具或全局函数，解码 JSON 参数，返回 JSON 结果或错误消息。工具调用会进入调用日志，全局函数不会；执行结束后的迟到回复被忽略。
+	 */
 	private async handleCall(message: Extract<WorkerToHostMessage, { type: "call" }>): Promise<void> {
 		const { id, name } = message;
 		const isTool = message.target === "tool";
@@ -239,6 +252,13 @@ class Execution {
 		this.post(reply);
 	}
 
+	/**
+	 * EN: Settle at most once, abort pending host calls, set the shared VM interrupt flag, and terminate the
+	 * worker before resolving. Failure preserves collected output/calls but omits store writes; cancellation
+	 * cannot undo completed tool effects.
+	 *
+	 * ZH: 至多结束一次，取消待处理宿主调用、设置共享 VM 中断标志，并在 worker 终止后完成结果。失败保留已收集的输出和调用记录，但省略存储写入；取消不能撤销已完成的工具效果。
+	 */
 	private finish(error: CodemodeError | undefined, value?: unknown, writes?: string): void {
 		if (this.finished) return;
 		this.finished = true;
@@ -274,13 +294,17 @@ class Execution {
 }
 
 /**
- * Runs JavaScript in a QuickJS VM (a separate wasm instance) inside a worker
- * thread. The script sees `tools.<name>(args)` for every registered tool, `ALL_TOOLS`,
- * the output helpers `text`, `image`, `exit`, and `console.*`, `store`/`load`, and the
- * configured globals; nothing else (no timers, `fetch`, `process`, `require`, modules).
+ * EN: Hold injected capabilities and execution defaults, not a persistent VM. Each execute call receives a
+ * fresh worker and tool-table snapshot. The script has no ambient host I/O; the exposed functions define
+ * its capabilities.
  *
- * Each `execute()` gets its own worker and VM; the sandbox only holds the tool
- * table and defaults. `close()` aborts in-flight executions.
+ * ZH: 持有注入能力与执行默认配置，不持有持续存在的 VM。每次 execute 都获得新的 worker 和工具表快照。脚本没有隐式宿主 I/O，暴露函数决定其能力边界。
+ *
+ * EN: The script receives tools, ALL_TOOLS, text, image, exit, console, store/load, and configured globals.
+ * It has no timers, fetch, process, require, or modules unless a capability is explicitly supplied.
+ * close() aborts active executions.
+ *
+ * ZH: 脚本获得 tools、ALL_TOOLS、text、image、exit、console、store/load 与配置的全局项。除非显式注入能力，否则没有定时器、fetch、process、require 或模块。close() 会取消活动执行。
  */
 export class CodemodeSandbox {
 	private readonly toolsByName = new Map<string, CodemodeTool>();
@@ -332,9 +356,11 @@ export class CodemodeSandbox {
 	}
 
 	/**
-	 * `code` is an async function body: `return` and top-level `await` work.
-	 * Never rejects for script failures; those come back as `{ ok: false }`.
-	 * The script can use `store(key, value)` and `load(key)` on `options.store`.
+	 * EN: Run an async function body and return an explicit success/failure result for script execution.
+	 * Closing the sandbox rejects new runs. Store values are supplied by the caller; successful storeWrites
+	 * must be applied by that caller.
+	 *
+	 * ZH: 执行异步函数体，并以显式成功或失败结果表达脚本执行。沙箱关闭后拒绝新运行。初始存储由调用者提供，成功后的 storeWrites 也需要调用者自行应用。
 	 */
 	execute(code: string, options: CodemodeExecuteOptions = {}): Promise<CodemodeResult> {
 		if (this.closed) return Promise.reject(new Error("Sandbox is closed"));

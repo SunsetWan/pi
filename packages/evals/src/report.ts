@@ -133,6 +133,13 @@ async function persistSession(caseResult: ReportCase, task: EvalTask, artifactDi
 	await writeFile(join(directory, "session.jsonl"), session, { mode: 0o600 });
 }
 
+/**
+ * EN: Read one native Vitest report and require one matching case, model identity, and consistent status.
+ * Keep missing metrics unavailable, validate score range, and distinguish infrastructure errors from a
+ * valid low score.
+ *
+ * ZH: 读取一份原生 Vitest 报告，要求恰好一个匹配案例、相同模型身份及一致状态。缺失指标保持不可用，分数需在有效范围，并区分基础设施错误与合法低分。
+ */
 export async function readTaskObservation(
 	task: EvalTask,
 	reportPath: string,
@@ -246,6 +253,13 @@ function groupPairs(expectedRuns: readonly ExpectedEvalRun[], observations: read
 	);
 }
 
+/**
+ * EN: Admit a pair only when the design expects exactly one arm per variant and both observations are
+ * uniquely scored. Missing, duplicate, skipped, pending, or errored arms block the pair instead of silently
+ * shrinking the cohort.
+ *
+ * ZH: 只有设计中每个变体恰好一个分支且两侧都唯一计分时才接纳配对。缺失、重复、跳过、待定或错误分支都会阻止该配对，不会静默缩小案例集合。
+ */
 function resolvePair(group: PairGroup): { pair?: Pair; blocked?: BlockedPair } {
 	const reasons: string[] = [];
 	for (const variant of VARIANTS) {
@@ -356,6 +370,13 @@ function comparisonFlags(pairs: readonly Pair[], controlPassRate: number | null,
 	return flags;
 }
 
+/**
+ * EN: Pair exact identities and withhold headline pass rates and lift for any eval set containing blocked
+ * pairs. Metric deltas use only pairs with both measurements; operational totals retain their own coverage
+ * counts.
+ *
+ * ZH: 按精确身份配对；任一评测集存在受阻配对时，不发布该集合的主要通过率与提升值。指标差值仅使用两侧均有测量的配对；运行总量另行保留覆盖计数。
+ */
 export function summarizeEvalObservations(
 	protocolDigest: string,
 	expectedRuns: readonly ExpectedEvalRun[],

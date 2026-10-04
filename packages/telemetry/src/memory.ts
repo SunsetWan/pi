@@ -117,6 +117,13 @@ function createSpan(
 	};
 }
 
+/**
+ * EN: Create a scoped record and invoke the business callback once. Recording setup failure falls back to a
+ * no-op span. Settlement sets an automatic status unless explicitly set, and later record mutations become
+ * inert.
+ *
+ * ZH: 建立作用域记录，并且只执行一次业务回调。记录初始化失败时回退到空实现 span。结束时若未显式设置状态则自动设置，结束后的记录修改不再生效。
+ */
 function startInMemorySpan<T>(
 	state: InMemoryTelemetryState,
 	parent: MutableRecordedTelemetrySpan | undefined,
@@ -186,8 +193,10 @@ function startInMemorySpan<T>(
 }
 
 /**
- * Backend-neutral reference implementation that records spans in process memory.
- * Create a fresh instance to isolate tests or independent recording scopes.
+ * EN: Keep deterministic span records in start order for tests and diagnostics. This recorder has no clock
+ * or retention bound; use it for controlled traces rather than an unbounded production export queue.
+ *
+ * ZH: 按开始顺序保存确定性的 span 记录，用于测试与诊断。该记录器没有时钟或保留数量上限，适合受控跟踪，不宜当作无限增长的生产导出队列。
  */
 export class InMemoryTelemetryContext implements TelemetryContext {
 	private readonly state: InMemoryTelemetryState = {
@@ -200,7 +209,12 @@ export class InMemoryTelemetryContext implements TelemetryContext {
 		return startInMemorySpan(this.state, undefined, options, callback);
 	}
 
-	/** Returns detached snapshots in span-start order. */
+	/**
+	 * EN: Return detached records, including copied attribute arrays and events. Reading or mutating this
+	 * snapshot cannot alter the recorder; a later call can observe newly settled spans.
+	 *
+	 * ZH: 返回分离的记录副本，包括属性数组与事件。读取或修改此快照不会改变记录器；之后再次调用可以观察新结束的 span。
+	 */
 	getSpans(): readonly RecordedTelemetrySpan[] {
 		return this.state.spans.map((span) => ({
 			id: span.id,

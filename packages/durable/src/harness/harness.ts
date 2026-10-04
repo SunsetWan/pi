@@ -80,6 +80,12 @@ type ConversationHost<Tool extends ToolRegistration> = {
 	create(target: CreateTarget, options: CreateOptions, context: Context): Promise<Conversation>;
 };
 
+/**
+ * EN: Provide an identity-only view of one conversation. Operations delegate to the Harness transaction
+ * line, submissions, task scheduler, and committed views; the handle does not cache transcript state.
+ *
+ * ZH: 提供只持有会话标识的操作入口。操作委托给 Harness 事务队列、提交输入、任务调度器和已提交视图；句柄自身不缓存对话历史状态。
+ */
 class ConversationImpl<Tool extends ToolRegistration> implements Conversation {
 	readonly id: ConversationId;
 	readonly #host: ConversationHost<Tool>;
@@ -161,7 +167,13 @@ class ConversationImpl<Tool extends ToolRegistration> implements Conversation {
 	}
 }
 
-/** Session kernel extended with conversation handles and a registry. */
+/**
+ * EN: Extend Session with a live extension registry, submissions, scheduler, and conversation views.
+ * Persist names and task checkpoints while resolving code from the current process registry at defined
+ * phase boundaries.
+ *
+ * ZH: 在 Session 上增加活动扩展注册表、输入提交、调度器与会话视图。持久化名称和任务检查点，并在规定的阶段边界从当前进程注册表解析代码。
+ */
 class HarnessImpl<Tool extends ToolRegistration> extends SessionImpl implements HarnessType {
 	readonly #storage: Storage;
 	readonly #options: HarnessOptions<Tool>;
@@ -229,7 +241,12 @@ class HarnessImpl<Tool extends ToolRegistration> extends SessionImpl implements 
 		return build({ conversationId: id, ...(cwd === undefined ? {} : { cwd }), read: this }, context);
 	}
 
-	/** Reconcile surviving `running` tasks to `pending`; part of open. */
+	/**
+	 * EN: Reconcile persisted running tasks back to pending during open. This recovery step does not dispatch
+	 * task handlers; resume, submit, or a wait starts scheduling.
+	 *
+	 * ZH: 打开时把持久化的 running 任务协调回 pending。此恢复步骤不派发任务处理函数；resume、submit 或等待操作才启动调度。
+	 */
 	openTasks(context: Context): Promise<void> {
 		return this.#tasks.open(context);
 	}
@@ -324,7 +341,12 @@ class HarnessImpl<Tool extends ToolRegistration> extends SessionImpl implements 
 		return super.close(context);
 	}
 
-	/** Join task invocations after admission is sealed and before Storage closes; writes no task outcome. */
+	/**
+	 * EN: Join task invocations after Session seals admission and signals close. Closing writes no terminal
+	 * task outcome, so interrupted work can remain pending for recovery after reopen.
+	 *
+	 * ZH: 在 Session 封闭准入并发出关闭信号后汇合任务调用。关闭不会写入任务终态，因此被中断工作可以保留给重新打开后的恢复。
+	 */
 	protected override beforeClose(): Promise<void> {
 		return this.#tasks.join();
 	}
@@ -407,6 +429,12 @@ function boundConversation(
 /** Durable agent harness over one Session. */
 export type Harness = HarnessType;
 
+/**
+ * EN: Open the agent runtime only when the registry contains all built-in tasks. Restore task state before
+ * returning the handle and close partially opened resources if recovery fails.
+ *
+ * ZH: 仅在注册表包含全部内置任务时打开 Agent 运行时。返回句柄前恢复任务状态；恢复失败则关闭部分打开的资源。
+ */
 export const Harness = {
 	/** Open a Harness over storage. The registry may keep changing while the Harness runs. */
 	async open<Tool extends ToolRegistration>(
