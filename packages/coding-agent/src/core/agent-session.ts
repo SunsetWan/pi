@@ -359,6 +359,21 @@ function estimateMessagesTokens(messages: AgentMessage[]): number {
 // AgentSession Class
 // ============================================================================
 
+/**
+ * EN: Application lifecycle around one Agent and one session tree. Read prompt(), _runAgentPrompt(), and
+ * _handleAgentEvent() as the main path. The SessionManager projection is the canonical finalized model
+ * context.
+ *
+ * ZH: 围绕一个 Agent 和一棵会话树管理应用生命周期。主线依次阅读 prompt()、_runAgentPrompt() 与 _handleAgentEvent()。SessionManager
+ * 的投影是已完成模型上下文的权威来源。
+ *
+ * EN: One session request can span several Agent runs because retry, overflow recovery, or extensions can
+ * continue after agent_end. agent_settled marks the session-level completion boundary. Public session
+ * listeners are synchronous notifications; internal Agent subscriptions are awaited.
+ *
+ * ZH: 一次会话请求可以跨越多次 Agent 运行：重试、溢出恢复或扩展都可能在 agent_end 后继续。agent_settled 标记会话层的完成边界。公开会话监听器是同步通知，内部 Agent
+ * 订阅则会被等待。
+ */
 export class AgentSession {
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
@@ -459,6 +474,13 @@ export class AgentSession {
 	/** Prompt options after before_agent_start mutations for the active run. */
 	private _runSystemPromptOptions?: NormalizedBuildSystemPromptOptions;
 
+	/**
+	 * EN: Subscribe internal persistence before use, install tool/request/turn hooks, and build the extension
+	 * and tool runtime. Hooks read the current runner when called, so reload can replace extensions without
+	 * replacing the Agent.
+	 *
+	 * ZH: 使用前先订阅内部持久化处理，安装工具、请求与轮次 hook，再组装扩展和工具运行时。hook 在调用时读取当前 runner，因此重载扩展无需替换 Agent。
+	 */
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
 		this.sessionManager = config.sessionManager;
@@ -614,19 +636,24 @@ export class AgentSession {
 	}
 
 	/**
-	 * Install tool hooks once on the Agent instance.
+	 * EN: Install session-owned preflight and result hooks on Agent. The before hook lets extensions block a
+	 * call; the after hook applies extension result changes and then normalizes images. These assignments
+	 * replace existing Agent tool hooks.
 	 *
-	 * The callbacks read `this._extensionRunner` at execution time, so extension reload swaps in the
-	 * new runner without reinstalling hooks. Extension-specific tool wrappers are still used to adapt
-	 * registered tool execution to the extension context. Tool call and tool result interception now
-	 * happens here instead of in wrappers.
+	 * ZH: 在 Agent 上安装会话负责的预检查与结果 hook。before hook 允许扩展阻止调用，after hook 应用扩展的结果变更后再规范化图片。这些赋值会替换 Agent 原有的工具
+	 * hook。
 	 */
 	private _installAgentToolHooks(): void {
 		this.agent.beforeToolCall = (context) => this._beforeToolCall(context);
 		this.agent.afterToolCall = (context) => this._afterToolCall(context);
 	}
 
-	/** `tool_call` handlers. `parentToolCallId` is set for calls another tool made. */
+	/**
+	 * EN: Emit tool_call before execution. Forward a block result or propagate a thrown handler error so the
+	 * agent pipeline fails the call. Nested calls include their parent id and use the same policy boundary.
+	 *
+	 * ZH: 执行前发出 tool_call。转发阻止结果，或继续抛出处理器错误，使 Agent 的工具流水线将该调用判为失败。嵌套调用携带父调用 ID，并经过相同策略边界。
+	 */
 	private async _beforeToolCall(
 		{ toolCall, args }: BeforeToolCallContext,
 		parentToolCallId?: string,
@@ -652,7 +679,13 @@ export class AgentSession {
 		}
 	}
 
-	/** `tool_result` handlers and image normalization. `parentToolCallId` is set for calls another tool made. */
+	/**
+	 * EN: Apply tool_result handlers before image normalization, including images supplied by extensions.
+	 * Preserve structured content only when it still matches the replaced content. Return undefined when no
+	 * hook or normalization changed the result.
+	 *
+	 * ZH: 先应用 tool_result 处理器，再规范化图片，包括扩展提供的图片。仅在结构化内容仍与替换后的 content 匹配时保留它。没有 hook 或规范化变更时返回 undefined。
+	 */
 	private async _afterToolCall(
 		{ toolCall, args, result, isError }: AfterToolCallContext,
 		parentToolCallId?: string,
@@ -696,8 +729,11 @@ export class AgentSession {
 	}
 
 	/**
-	 * Run a call that the tool call `parentToolCallId` made through `ctx.executeTool()`. It goes
-	 * through the agent's tool pipeline with the session's hooks, against the callable tools.
+	 * EN: Route ctx.executeTool() through the same validation and session hooks as a direct model call.
+	 * Callable tools can differ from tools declared to the model. Nested execution events are emitted
+	 * separately and usage is later attached to the parent result.
+	 *
+	 * ZH: 让 ctx.executeTool() 经过与模型直接调用相同的验证和会话 hook。可调用工具集合可能不同于向模型声明的集合。嵌套执行事件单独发出，用量稍后附到父调用结果。
 	 */
 	private async _executeNestedToolCall(
 		parentToolCallId: string,
@@ -756,6 +792,19 @@ export class AgentSession {
 		return { ...context, messages: this.sessionManager.buildSessionProjection().messages };
 	}
 
+	/**
+	 * EN: Rebuild each request from the canonical session projection and the current executable tools before
+	 * invoking any previous prepareRequest hook. This prevents compaction or context edits from leaving the
+	 * next request on stale Agent history.
+	 *
+	 * ZH: 先依据权威会话投影和当前可执行工具重建每次请求，再调用原有 prepareRequest hook，避免压缩或上下文编辑后，下一次请求仍沿用 Agent 中的旧历史。
+	 *
+	 * EN: A virtual selection stays in Agent state while only this request uses its routed physical model.
+	 * Check compaction against that physical model, persist router state when changed, and preserve the chosen
+	 * route after compaction.
+	 *
+	 * ZH: 虚拟模型选择保留在 Agent 状态中，只有本次请求使用路由后的实体模型。压缩检查依据实体模型；路由状态变化时持久化；压缩后保留已确定的路由。
+	 */
 	private _installAgentRequestProjection(): void {
 		const previousPrepareRequest = this.agent.prepareRequest;
 		this.agent.prepareRequest = async (request, signal) => {
@@ -855,6 +904,13 @@ export class AgentSession {
 		return boundary.continue;
 	}
 
+	/**
+	 * EN: Run the extension turn_end boundary before the low-level loop chooses its next step. Commit drafts
+	 * first, then combine extension continuation with the previous finishTurn decision. An explicit previous
+	 * end decision wins.
+	 *
+	 * ZH: 在底层循环决定下一步之前运行扩展的 turn_end 边界。先提交草稿条目，再合并扩展续跑请求与原有 finishTurn 决策；原有明确的 end 决策优先。
+	 */
 	private _installAgentBoundaryHooks(): void {
 		const previousFinishTurn = this.agent.finishTurn;
 		this.agent.finishTurn = async (turn, signal) => {
@@ -867,6 +923,13 @@ export class AgentSession {
 		};
 	}
 
+	/**
+	 * EN: Before another assistant response, compact if needed, refresh projected context, and prepare system
+	 * prompt and tool changes. The next loop request therefore sees committed session edits and the current
+	 * loadout.
+	 *
+	 * ZH: 下一次 assistant 响应前，按需压缩、刷新投影上下文，并准备 system 提示词及工具变更，使下一轮请求看到已提交的会话编辑和当前工具配置。
+	 */
 	private _installAgentNextTurnRefresh(): void {
 		const previousPrepareNextTurnWithContext =
 			this.agent.prepareNextTurnWithContext ??
@@ -907,6 +970,12 @@ export class AgentSession {
 	// Event Subscription
 	// =========================================================================
 
+	/**
+	 * EN: Replace Agent history with the session projection and map projected message objects back to source
+	 * entry ids. Raw history can contain entries that are absent from this model-facing view.
+	 *
+	 * ZH: 用会话投影替换 Agent 历史，并将投影消息对象映射回源条目 ID。原始历史中可能存在未出现在这份模型视图里的条目。
+	 */
 	private _refreshFinalizedContext(): void {
 		const projection = this.sessionManager.buildSessionProjection();
 		for (const entry of projection.entries) {
@@ -993,6 +1062,12 @@ export class AgentSession {
 		};
 	}
 
+	/**
+	 * EN: Append validated boundary drafts to the real session, refresh Agent context, then notify
+	 * entry_appended listeners. Preview managers used by handlers do not mutate this persistent tree.
+	 *
+	 * ZH: 把已验证的边界草稿追加到真实会话，刷新 Agent 上下文，然后通知 entry_appended 监听器。处理器使用的预览 manager 不会修改这棵持久化树。
+	 */
 	private _commitBoundaryDrafts(drafts: SessionBoundaryDraft[]): void {
 		const appended = this._applyBoundaryDrafts(this.sessionManager, drafts);
 		this._refreshFinalizedContext();
@@ -1047,6 +1122,13 @@ export class AgentSession {
 		resolve();
 	}
 
+	/**
+	 * EN: Clear session run activity and emit agent_settled to extensions and public listeners. Prompts
+	 * submitted during this callback are deferred, then executed before this method finishes. Idle waiters are
+	 * resolved only when the resulting session state is idle.
+	 *
+	 * ZH: 清除会话运行活动标记，并向扩展和公开监听器发出 agent_settled。在此回调期间提交的 prompt 会延后执行，但仍在本方法结束前运行；最终会话状态为空闲时才唤醒等待者。
+	 */
 	private async _emitAgentSettled(): Promise<void> {
 		this._cacheWarmer?.onAgentSettled();
 		this._isAgentRunActive = false;
@@ -1070,7 +1152,18 @@ export class AgentSession {
 		this._resolveIdleWaitIfIdle();
 	}
 
-	/** Internal handler for agent events - shared by subscribe and reconnect */
+	/**
+	 * EN: Await extensions, notify public listeners, then persist finalized messages and update retry
+	 * bookkeeping. The Agent awaits this entire handler, so persistence completes before later loop phases such
+	 * as tool preflight.
+	 *
+	 * ZH: 先等待扩展，再通知公开监听器，随后持久化完成消息并更新重试记录。Agent 会等待整个处理器，因此持久化在工具预检查等后续循环阶段之前完成。
+	 *
+	 * EN: A message_end listener runs before appendMessage(), so it must not assume the entry already exists.
+	 * turn_end is the safe point for deferred context-only messages, after all tool results are recorded.
+	 *
+	 * ZH: message_end 监听器运行在 appendMessage() 之前，因此不能假定条目已存在。turn_end 时全部工具结果都已记录，是插入延后的纯上下文消息的安全位置。
+	 */
 	private _handleAgentEvent = async (event: AgentEvent): Promise<void> => {
 		// Record the calls a tool made through ctx.executeTool() and their usage on its result message.
 		if (this._nestedToolCalls) {
@@ -1205,6 +1298,14 @@ export class AgentSession {
 		return undefined;
 	}
 
+	/**
+	 * EN: Append context_edit entries with null replacements to omit failed attempts from future model
+	 * requests. Keep the original assistant and tool entries in raw history. Reject when a projected message
+	 * cannot be traced to a persistent entry.
+	 *
+	 * ZH: 追加 replacement 为 null 的 context_edit 条目，让失败尝试不再进入后续模型请求。原始 assistant
+	 * 和工具条目仍保留在历史中。若投影消息无法追溯到持久化条目，则拒绝操作。
+	 */
 	private _omitRecoveryAttempt(message: AssistantMessage, toolResults: AgentMessage[] = []): void {
 		const targets = [message, ...toolResults];
 		const targetIds = targets.map((target) => this._findPersistedMessageEntryId(target));
@@ -1251,7 +1352,13 @@ export class AgentSession {
 		Object.assign(targetRecord, replacement);
 	}
 
-	/** Emit extension events based on agent events */
+	/**
+	 * EN: Translate Agent events into extension events. A message_end replacement mutates the finalized message
+	 * object in place so Agent state, later events, and persistence share the same value. Turn-boundary
+	 * tracking prevents duplicate dispatch.
+	 *
+	 * ZH: 把 Agent 事件转换为扩展事件。message_end 的替换会原地修改已完成消息对象，使 Agent 状态、后续事件与持久化共享同一个值。轮次边界记录用于防止重复派发。
+	 */
 	private async _emitExtensionEvent(event: AgentEvent): Promise<void> {
 		if (event.type === "agent_start") {
 			this._turnIndex = 0;
@@ -1332,9 +1439,11 @@ export class AgentSession {
 	}
 
 	/**
-	 * Subscribe to agent events.
-	 * Session persistence is handled internally (saves messages on message_end).
-	 * Multiple listeners can be added. Returns unsubscribe function for this listener.
+	 * EN: Add a synchronous session-event observer and return its unsubscribe function. Extensions run first.
+	 * For message_end, persistence runs after these observers; returning a Promise does not make the session
+	 * await it.
+	 *
+	 * ZH: 添加同步会话事件观察者，并返回取消订阅函数。扩展先运行；message_end 的持久化发生在这些观察者之后。观察者返回 Promise 不会让会话等待它。
 	 */
 	subscribe(listener: AgentSessionEventListener): () => void {
 		this._eventListeners.push(listener);
@@ -1357,8 +1466,11 @@ export class AgentSession {
 	}
 
 	/**
-	 * Remove all listeners and disconnect from agent.
-	 * Call this when completely done with the session.
+	 * EN: Request cancellation, invalidate extension contexts, remove listeners, and release session resources.
+	 * This method does not await idle; callers that need completed cancellation should await abort() before
+	 * disposal.
+	 *
+	 * ZH: 请求取消、使扩展上下文失效、移除监听器并释放会话资源。此方法不等待空闲；需要确认取消已完成的调用者，应先等待 abort() 再释放。
 	 */
 	dispose(): void {
 		try {
@@ -1772,6 +1884,18 @@ export class AgentSession {
 	// Prompting
 	// =========================================================================
 
+	/**
+	 * EN: Own one session request across the initial Agent prompt and any later continuations. After each run,
+	 * process retry and compaction, then the pre-settle extension boundary. agent_end alone does not finish
+	 * this method.
+	 *
+	 * ZH: 管理一次会话请求，包括初次 Agent prompt 与后续续跑。每次运行后先处理重试和压缩，再处理结束前的扩展边界。仅出现 agent_end 并不表示本方法结束。
+	 *
+	 * EN: The finally block clears request state, flushes deferred messages, and emits agent_settled even after
+	 * failure. An abort request prevents further continuation.
+	 *
+	 * ZH: finally 清理请求状态、写入延后消息，并在失败后也发出 agent_settled。收到取消请求后，不再继续运行。
+	 */
 	private async _runAgentPrompt(messages: AgentMessage | AgentMessage[]): Promise<void> {
 		this._agentRunAbortRequested = false;
 		// Compaction before the prompt may have scheduled a retry; the new prompt replaces it.
@@ -1803,6 +1927,13 @@ export class AgentSession {
 		}
 	}
 
+	/**
+	 * EN: Decide whether a completed low-level run needs another continuation: retry eligible failures, check
+	 * context recovery, then deliver input queued by agent_end handlers. Clear the last-response bookkeeping
+	 * once consumed.
+	 *
+	 * ZH: 决定已结束的底层运行是否需要续跑：先重试符合条件的失败，再检查上下文恢复，最后投递 agent_end 处理器排入的输入。消费后清除上一响应的临时记录。
+	 */
 	private async _handlePostAgentRun(): Promise<boolean> {
 		const message = this._lastAssistantMessage;
 		const toolResults = this._lastAssistantToolResults;
@@ -1843,6 +1974,13 @@ export class AgentSession {
 		return !this._agentRunAbortRequested && this.agent.hasQueuedMessages();
 	}
 
+	/**
+	 * EN: Let extensions append final context changes before the session settles. Preview and commit drafts,
+	 * then validate that continuation has runnable model context. An abort during the boundary prevents
+	 * continuation.
+	 *
+	 * ZH: 让扩展在会话结束前追加最后的上下文变更。先预览并提交草稿，再验证是否有可供续跑的模型上下文。边界处理期间发生取消会阻止续跑。
+	 */
 	private async _runBeforeSettleBoundary(): Promise<boolean> {
 		if (!this._extensionRunner.hasHandlers("agent_before_settle")) return this.agent.hasQueuedMessages();
 		this._isBeforeSettle = true;
@@ -1910,13 +2048,18 @@ export class AgentSession {
 	}
 
 	/**
-	 * Send a prompt to the agent.
-	 * - Handles extension commands (registered via pi.registerCommand) immediately, even during streaming
-	 * - Expands file-based prompt templates by default
-	 * - During streaming, queues via steer() or followUp() based on streamingBehavior option
-	 * - Validates model and API key before sending (when not streaming)
-	 * @throws Error if streaming and no streamingBehavior specified
-	 * @throws Error if no model selected or no API key available (when not streaming)
+	 * EN: Application prompt entry: execute extension commands, run input handlers, expand skills and
+	 * templates, then either queue input or validate the model and authentication for a new request. During
+	 * streaming, streamingBehavior is required.
+	 *
+	 * ZH: 应用的 prompt 入口：执行扩展命令、运行输入处理器、展开技能和模板，然后排队输入，或为新请求验证模型与认证。流式运行期间必须指定 streamingBehavior。
+	 *
+	 * EN: Before a new request, check compaction, run before_agent_start, normalize images using the resulting
+	 * model, combine user and custom messages, and add any system patch. preflightResult distinguishes handled,
+	 * queued, and started input.
+	 *
+	 * ZH: 新请求前检查压缩、运行 before_agent_start、按最终模型规范化图片、合并用户与自定义消息，并加入必要的 system 补丁。preflightResult
+	 * 区分已处理、已排队与已开始的输入。
 	 */
 	async prompt(text: string, options?: PromptOptions): Promise<void> {
 		if (this._isEmittingAgentSettled) {
@@ -2153,13 +2296,11 @@ export class AgentSession {
 	}
 
 	/**
-	 * Queue a steering message while the agent is running.
-	 * Delivered after the current assistant turn finishes executing its tool calls,
-	 * before the next LLM call.
-	 * Expands skill commands and prompt templates. Errors on extension commands.
-	 * @param images Optional image attachments to include with the message
-	 * @param options Input source; defaults to interactive
-	 * @throws Error if text is an extension command
+	 * EN: Run input handlers and expand skills/templates, then queue a steering message. Delivery waits for an
+	 * Agent scheduling point; it does not interrupt the current tool batch. Registered extension commands
+	 * cannot be queued.
+	 *
+	 * ZH: 运行输入处理器并展开技能和模板，然后排入 steering 消息。投递需等待 Agent 调度点，不会打断当前工具批次。已注册的扩展命令不能排队。
 	 */
 	async steer(
 		text: string,
@@ -2170,12 +2311,10 @@ export class AgentSession {
 	}
 
 	/**
-	 * Queue a follow-up message to be processed after the agent finishes.
-	 * Delivered only when agent has no more tool calls or steering messages.
-	 * Expands skill commands and prompt templates. Errors on extension commands.
-	 * @param images Optional image attachments to include with the message
-	 * @param options Input source; defaults to interactive
-	 * @throws Error if text is an extension command
+	 * EN: Use the same input preparation as steer(), but deliver only when the Agent would otherwise finish its
+	 * current work. Follow-up input therefore runs after tool continuation and steering input.
+	 *
+	 * ZH: 使用与 steer() 相同的输入准备，但只在 Agent 原本将完成当前工作时投递，因此 follow-up 输入排在工具续跑和 steering 输入之后。
 	 */
 	async followUp(
 		text: string,
@@ -2231,17 +2370,12 @@ export class AgentSession {
 	}
 
 	/**
-	 * Send a custom message to the session. Creates a CustomMessageEntry.
+	 * EN: Deliver an extension message now, through a queue, or with the next user prompt. During streaming,
+	 * context-only messages wait until turn_end to avoid splitting an assistant tool call from its result.
+	 * nextTurn messages wait for a later prompt.
 	 *
-	 * Handles four cases:
-	 * - Streaming: queues message, processed when loop pulls from queue
-	 * - Streaming + triggerTurn false: appended to state/session once the current turn ends
-	 * - Not streaming + triggerTurn: appends to state/session, starts new turn
-	 * - Not streaming + no trigger: appends to state/session, no turn
-	 *
-	 * @param message Custom message with customType, content, display, details
-	 * @param options.triggerTurn If true and not streaming, triggers a new LLM turn
-	 * @param options.deliverAs Delivery mode: "steer", "followUp", or "nextTurn"
+	 * ZH: 立即、通过队列或随下一次用户 prompt 投递扩展消息。流式运行期间，纯上下文消息等到 turn_end 才写入，避免把 assistant 工具调用与结果隔开。nextTurn 消息等待后续
+	 * prompt。
 	 */
 	async sendCustomMessage<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
@@ -2382,7 +2516,10 @@ export class AgentSession {
 	}
 
 	/**
-	 * Abort current operation and wait for agent to become idle.
+	 * EN: Cancel session continuation, retry waits, compaction, branch summary, and the Agent, then wait for
+	 * session idle. This method does not cancel independent executeBash() calls; those have abortBash().
+	 *
+	 * ZH: 取消会话续跑、重试等待、压缩、分支摘要和 Agent，然后等待会话空闲。此方法不会取消独立的 executeBash() 调用；它们使用 abortBash()。
 	 */
 	async abort(): Promise<void> {
 		if (this._isAgentRunActive) {
@@ -2396,6 +2533,13 @@ export class AgentSession {
 		await this.waitForIdle();
 	}
 
+	/**
+	 * EN: Wait until the session has no active run or compaction/branch summary. This is wider than
+	 * Agent.waitForIdle(), but independent bash work is outside this idle condition. Do not await it from an
+	 * awaited handler that must finish before idle.
+	 *
+	 * ZH: 等待会话没有活动运行、压缩或分支摘要。此范围大于 Agent.waitForIdle()，但独立 bash 工作不在空闲条件内。不要在必须先结束才能进入空闲的被等待处理器中等待它。
+	 */
 	async waitForIdle(): Promise<void> {
 		if (this.isIdle) {
 			return;
@@ -2700,19 +2844,16 @@ export class AgentSession {
 	}
 
 	/**
-	 * Manually compact the session context.
+	 * EN: Manual compaction first aborts the current request. Prepare the retained suffix and summary input,
+	 * allow session_before_compact to cancel or supply a result, then append one compaction entry and refresh
+	 * context.
 	 *
-	 * This is the manual entry point used by `/compact`, RPC, and extensions. It is
-	 * separate from automatic threshold/overflow compaction, which enters through
-	 * `_checkCompaction()` and `_runAutoCompaction()`. After preparation and the
-	 * `session_before_compact` hook, both paths call the lower-level `compact()`
-	 * function imported from `./compaction/index.ts`, unless the hook cancels or
-	 * supplies a custom result.
+	 * ZH: 手动压缩先取消当前请求，准备要保留的尾部与摘要输入，允许 session_before_compact 取消或提供结果，再追加一个 compaction 条目并刷新上下文。
 	 *
-	 * Aborts the current agent operation first. Manual compaction never retries or
-	 * continues the interrupted agent turn.
+	 * EN: Raw history remains available. Manual compaction does not resume the interrupted turn. Failure emits
+	 * compaction_end and the failure extension event, then rejects; cleanup always clears the compaction state.
 	 *
-	 * @param customInstructions Optional instructions for the compaction summary
+	 * ZH: 原始历史仍然可用。手动压缩不会恢复被打断的轮次。失败时发出 compaction_end 和失败扩展事件，然后拒绝；清理始终清除压缩状态。
 	 */
 	async compact(customInstructions?: string): Promise<CompactionResult> {
 		await this.abort();
@@ -2877,25 +3018,17 @@ export class AgentSession {
 	}
 
 	/**
-	 * Dispatch automatic compaction after `agent_end` or before prompt submission.
-	 * Manual compaction does not call this method; it enters through `compact()`.
+	 * EN: Select automatic recovery from finalized response state and the current projection. Context overflow
+	 * or a recoverable length stop can compact and retry once; a completed response or threshold crossing
+	 * compacts without repeating that response.
 	 *
-	 * Automatic cases:
-	 * 1. Overflow with retry: a context-overflow error or recoverable length stop;
-	 *    remove the failed assistant message, compact, and retry the turn once.
-	 * 2. Overflow without retry: a successful response exceeded the configured
-	 *    context window; compact but preserve the completed response.
-	 * 3. Threshold without retry: valid or estimated context usage crossed the
-	 *    configured threshold; compact without retrying the completed response.
+	 * ZH: 依据已完成响应状态和当前投影选择自动恢复方式。上下文溢出或可恢复的长度截断可以压缩并重试一次；已完成响应或达到阈值时则压缩，但不重复该响应。
 	 *
-	 * Each case calls `_runAutoCompaction()`. After preparation and the
-	 * `session_before_compact` hook, that method calls the lower-level `compact()`
-	 * function imported from `./compaction/index.ts`, unless the hook cancels or
-	 * supplies a custom result.
+	 * EN: Ignore stale pre-compaction usage and errors from a different physical model. Recovery omissions are
+	 * recorded as context edits, so raw failure evidence remains. Return whether the outer session loop should
+	 * continue.
 	 *
-	 * @param assistantMessage The assistant message to check
-	 * @param skipAbortedCheck If false, include aborted messages (for pre-prompt check). Default: true
-	 * @returns Whether the post-run loop should call `agent.continue()` for overflow recovery or queued messages
+	 * ZH: 忽略压缩前的旧用量，以及来自其他实体模型的错误。恢复过程中通过上下文编辑记录省略项，保留原始失败证据。返回值决定外围会话循环是否续跑。
 	 */
 	private async _checkCompaction(
 		assistantMessage: AssistantMessage,
@@ -3038,14 +3171,16 @@ export class AgentSession {
 	}
 
 	/**
-	 * Execute threshold or overflow compaction. Manual compaction uses
-	 * `AgentSession.compact()` instead. Both paths call the lower-level `compact()`
-	 * function imported from `./compaction/index.ts` after preparation and extension
-	 * interception.
+	 * EN: Prepare and summarize for threshold or overflow recovery, with the same extension interception as
+	 * manual compaction. Append the result only after cancellation checks, refresh context, and return whether
+	 * recovery or queued input needs continuation.
 	 *
-	 * @param reason Automatic trigger selected by `_checkCompaction()`
-	 * @param willRetry Whether to continue the interrupted turn after overflow compaction
-	 * @returns Whether the post-run loop should call `agent.continue()`
+	 * ZH: 为阈值或溢出恢复准备并生成摘要，经过与手动压缩相同的扩展拦截。取消检查通过后才追加结果、刷新上下文，并返回恢复或排队输入是否需要续跑。
+	 *
+	 * EN: Unlike manual compact(), failures become events and a false result. The abort controller is released
+	 * in finally so idle waiters cannot remain blocked by stale compaction state.
+	 *
+	 * ZH: 与手动 compact() 不同，失败会转为事件和 false 结果。finally 释放取消控制器，避免空闲等待者被过期压缩状态阻塞。
 	 */
 	private async _runAutoCompaction(reason: "overflow" | "threshold", willRetry: boolean): Promise<boolean> {
 		const model = this.model;
@@ -3208,6 +3343,14 @@ export class AgentSession {
 		return this.settingsManager.getCompactionEnabled();
 	}
 
+	/**
+	 * EN: Connect host UI, command actions, shutdown, and error handling to the current extension runner. Then
+	 * emit session_start and discover extension resources. createAgentSession() builds the runner but does not
+	 * perform this host binding.
+	 *
+	 * ZH: 把宿主 UI、命令操作、关闭和错误处理接入当前扩展 runner，随后发出 session_start 并发现扩展资源。createAgentSession() 负责构造
+	 * runner，不负责这一步宿主绑定。
+	 */
 	async bindExtensions(bindings: ExtensionBindings): Promise<void> {
 		if (bindings.uiContext !== undefined) {
 			this._extensionUIContext = bindings.uiContext;
@@ -3555,6 +3698,13 @@ export class AgentSession {
 		return this._isDeclarable(name) && this._toolDefinitions.get(name)?.definition.defaultActive !== false;
 	}
 
+	/**
+	 * EN: Build built-in tool definitions, create and bind the extension runner, then merge and activate
+	 * allowed tools. Extension/custom tools can replace built-ins with the same name; the Agent receives
+	 * wrapped executable tools.
+	 *
+	 * ZH: 构造内置工具定义、创建并绑定扩展 runner，再合并及激活获准工具。扩展或自定义工具可以替换同名内置工具，Agent 收到的是包装后的可执行工具。
+	 */
 	private _buildRuntime(options: {
 		activeToolNames?: string[];
 		flagValues?: Map<string, boolean | string>;
@@ -3707,8 +3857,11 @@ export class AgentSession {
 	}
 
 	/**
-	 * Prepare a retryable error for continuation with exponential backoff.
-	 * @returns true if the caller should continue the agent, false otherwise
+	 * EN: Apply the bounded retry budget and abortable backoff after a retryable response. Omit the failed
+	 * attempt from model context using persistent context edits, while retaining raw history. A cancelled delay
+	 * returns false and closes retry status.
+	 *
+	 * ZH: 在可重试响应后应用有限重试次数与可取消退避。通过持久化上下文编辑，从模型上下文中省略失败尝试，同时保留原始历史。等待被取消时返回 false 并结束重试状态。
 	 */
 	private async _prepareRetry(message: AssistantMessage): Promise<boolean> {
 		const settings = this.settingsManager.getRetrySettings();

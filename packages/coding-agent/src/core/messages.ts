@@ -40,8 +40,11 @@ export interface BashExecutionMessage {
 }
 
 /**
- * Message type for extension-injected messages via sendMessage().
- * These are custom messages that extensions can inject into the conversation.
+ * EN: An application message supplied by an extension. display changes UI rendering only; convertToLlm()
+ * still sends content as a user message. customType and details stay outside the provider payload.
+ *
+ * ZH: 由扩展提供的应用消息。display 只影响 UI 渲染，convertToLlm() 仍将 content 作为 user 消息发送。customType 和 details 不进入 Provider
+ * 载荷。
  */
 export interface CustomMessage<T = unknown> {
 	role: "custom";
@@ -138,12 +141,17 @@ export function createCustomMessage(
 }
 
 /**
- * Transform AgentMessages (including custom types) to LLM-compatible Messages.
+ * EN: The coding-session boundary between Agent roles and the four model roles. Convert bash results,
+ * custom messages, and summaries to user content; omit bash messages marked excludeFromContext; preserve
+ * system, user, assistant, and toolResult messages.
  *
- * This is used by:
- * - Agent's transormToLlm option (for prompt calls and queued messages)
- * - Compaction's generateSummary (for summarization)
- * - Custom extensions and tools
+ * ZH: 编码会话中 Agent 角色与四种模型角色之间的转换边界。将 bash 结果、自定义消息及摘要转为 user 内容，省略标记 excludeFromContext 的 bash 消息，并保留
+ * system、user、assistant、toolResult。
+ *
+ * EN: This conversion does not mutate or persist the session tree. The SDK injects it into Agent;
+ * compaction also uses it before serializing a transcript for summarization.
+ *
+ * ZH: 此转换不修改或持久化会话树。SDK 将它注入 Agent；压缩在把对话序列化为摘要输入之前，也使用此转换。
  */
 export function convertToLlm(messages: AgentMessage[]): Message[] {
 	return messages

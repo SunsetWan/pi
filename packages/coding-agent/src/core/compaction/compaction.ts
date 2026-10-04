@@ -1,8 +1,10 @@
 /**
- * Context compaction for long sessions.
+ * EN: Context compaction for long sessions. Preparation and estimation are local;
+ * summary generation calls a model. AgentSession controls the lifecycle and
+ * SessionManager persists the resulting checkpoint.
  *
- * Pure functions for compaction logic. The session manager handles I/O,
- * and after compaction the session is reloaded.
+ * ZH: 长会话的上下文压缩。准备和估算在本地完成，摘要生成会调用模型。
+ * AgentSession 控制生命周期，SessionManager 持久化生成的检查点。
  */
 
 import type { AgentMessage, StreamFn, ThinkingLevel } from "@earendil-works/pi-agent-core";
@@ -190,8 +192,11 @@ function getLastAssistantUsageInfo(messages: AgentMessage[]): { usage: Usage; in
 }
 
 /**
- * Estimate context tokens from messages, using the last assistant usage when available.
- * If there are messages after the last usage, estimate their tokens with estimateTokens.
+ * EN: Start with the latest valid assistant usage and estimate only messages after it. Without valid usage,
+ * estimate all messages. The returned lastUsageIndex lets callers check whether a later compaction or edit
+ * invalidated that usage.
+ *
+ * ZH: 以最近有效的 assistant 用量为起点，仅估算其后的消息；没有有效用量时则估算全部消息。返回的 lastUsageIndex 让调用者判断后续压缩或编辑是否使该用量失效。
  */
 export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEstimate {
 	const usageInfo = getLastAssistantUsageInfo(messages);
@@ -223,7 +228,13 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
 	};
 }
 
-/** Estimate projected context without trusting usage captured before a later edit or compaction. */
+/**
+ * EN: Trust provider usage only if its source entry is newer than every context edit and compaction on the
+ * branch. Otherwise estimate the current projection and replay the system prompt once, avoiding stale
+ * pre-edit usage.
+ *
+ * ZH: 只有用量来源条目晚于分支上全部上下文编辑和压缩时，才信任 Provider 用量。否则估算当前投影，并仅计算一次重放后的 system 提示词，避免沿用编辑前的旧用量。
+ */
 export function estimateProjectedContextTokens(
 	projection: SessionProjection,
 	branchEntries: SessionEntry[],
@@ -262,7 +273,12 @@ export function estimateProjectedContextTokens(
 }
 
 /**
- * Check if compaction should trigger based on context usage.
+ * EN: Trigger when compaction is enabled and context usage is strictly above contextWindow minus
+ * reserveTokens. reserveTokens leaves room for the next response; keepRecentTokens controls the later cut
+ * selection.
+ *
+ * ZH: 启用压缩且上下文用量严格大于 contextWindow 减 reserveTokens 时触发。reserveTokens 为下一次响应保留空间，keepRecentTokens
+ * 则控制后续截断位置选择。
  */
 export function shouldCompact(contextTokens: number, contextWindow: number, settings: CompactionSettings): boolean {
 	if (!settings.enabled) return false;
@@ -292,8 +308,11 @@ function estimateTextAndImageContentChars(content: string | Array<{ type: string
 }
 
 /**
- * Estimate token count for a message using chars/4 heuristic.
- * This is conservative (overestimates tokens).
+ * EN: Estimate from character counts divided by four, with a fixed image allowance and serialized tool
+ * arguments. This is a heuristic, not a tokenizer or a guaranteed upper bound; language and provider
+ * encoding can change the error.
+ *
+ * ZH: 按字符数除以四估算，并为图片设置固定额度、计入序列化工具参数。这是启发式估算，不是 tokenizer，也不保证为上界；语言和 Provider 编码会影响误差。
  */
 export function estimateTokens(message: AgentMessage): number {
 	let chars = 0;
@@ -428,20 +447,16 @@ export interface CutPointResult {
 }
 
 /**
- * Find the cut point in session entries that keeps approximately `keepRecentTokens`.
+ * EN: Select a retained suffix by walking backward through raw entries until the estimated budget is
+ * reached. Cut only at user-like or assistant messages, never at a tool result. Include nearby metadata and
+ * report whether the cut splits a user turn.
  *
- * Algorithm: Walk backwards from newest, accumulating estimated message sizes.
- * Stop when we've accumulated >= keepRecentTokens. Cut at that point.
+ * ZH: 从原始条目末尾反向累计到估算预算，选择要保留的尾部。仅在类似 user 或 assistant 的消息处截断，绝不从工具结果开始截断。纳入邻近元数据，并报告是否拆分了用户轮次。
  *
- * Can cut at user OR assistant messages (never tool results). When cutting at an
- * assistant message with tool calls, its tool results come after and will be kept.
+ * EN: prepareCompaction() uses the projection-aware variant so context edits are respected. This exported
+ * helper operates on the entries supplied to it.
  *
- * Returns CutPointResult with:
- * - firstKeptEntryIndex: the entry index to start keeping from
- * - turnStartIndex: if cutting mid-turn, the user message that started that turn
- * - isSplitTurn: whether we're cutting in the middle of a turn
- *
- * Only considers entries between `startIndex` and `endIndex` (exclusive).
+ * ZH: prepareCompaction() 使用考虑投影的版本，以尊重上下文编辑。此导出辅助函数直接处理传入的条目。
  */
 export function findCutPoint(
 	entries: SessionEntry[],
@@ -579,8 +594,11 @@ const UPDATE_SUMMARIZATION_PROMPT = `The messages above are NEW conversation mes
 ${UPDATE_SUMMARIZATION_INSTRUCTIONS}`;
 
 /**
- * Returns an error message when a summarization response cannot safely be persisted.
- * A length stop contains partial text and must not become a session checkpoint.
+ * EN: Reject provider errors and length-limited summaries because partial text must not become a
+ * checkpoint. Cancellation is checked by the session orchestration before persistence; this helper only
+ * classifies these two failure states.
+ *
+ * ZH: 拒绝 Provider 错误与达到长度上限的摘要，因为部分文本不能成为检查点。持久化前的取消检查由会话编排负责；此辅助函数只分类这两种失败状态。
  */
 export function getSummarizationFailure(response: AssistantMessage, label: string): string | undefined {
 	if (response.stopReason === "error") {
@@ -610,11 +628,11 @@ function createSummarizationOptions(
 }
 
 /**
- * Shared choke point for every compaction/branch-summary summarization call. Wraps the
- * single LLM call in {@link retryAssistantCall} so transient stream drops (e.g.
- * `terminated`, socket close) honor the configured retry policy instead of failing
- * the whole compaction on the first attempt. Deterministic errors and aborts return
- * immediately (see {@link retryAssistantCall}).
+ * EN: Make a summary request through the supplied stream function or the compatibility completion API, with
+ * the shared retry policy. Disable prompt-cache retention and assign a routing id when none was supplied.
+ * Return the final assistant message; callers validate summary content.
+ *
+ * ZH: 通过传入的流函数或兼容层 completion API 请求摘要，并应用共享重试策略。关闭提示词缓存保留，未提供路由 ID 时创建一个。返回最终 assistant 消息，调用者负责验证摘要内容。
  */
 export async function completeSummarization(
 	model: Model<any>,
@@ -692,7 +710,13 @@ function buildSummarizationContext(promptText: string): TranscriptContext {
 	});
 }
 
-/** Generate or update a conversation summary and return its provider usage. */
+/**
+ * EN: Serialize model-compatible conversation text into a separate summary request. Use the update prompt
+ * when a previous summary exists, cap output by reserveTokens and model limits, and reject incomplete
+ * summaries or attempted tool calls.
+ *
+ * ZH: 将模型兼容的对话序列化为文本，组成独立摘要请求。有旧摘要时使用更新提示词，按 reserveTokens 和模型上限限制输出，并拒绝不完整摘要或工具调用尝试。
+ */
 export async function generateSummaryWithUsage(
 	currentMessages: AgentMessage[],
 	model: Model<any>,
@@ -769,6 +793,13 @@ export async function generateSummaryWithUsage(
 // Compaction Preparation (for extensions)
 // ============================================================================
 
+/**
+ * EN: Prepared boundary and inputs for summary generation: history, optional split-turn prefix, retained
+ * entry id, previous summary, token estimate, and file-operation evidence. Preparation does not call a
+ * provider or write a session.
+ *
+ * ZH: 摘要生成前准备的边界与输入：历史、可选的拆分轮次前缀、保留条目 ID、之前的摘要、token 估算和文件操作记录。准备阶段不调用 Provider，也不写会话。
+ */
 export interface CompactionPreparation {
 	/** UUID of first entry to keep */
 	firstKeptEntryId: string;
@@ -799,6 +830,13 @@ function findProjectedTurnStartIndex(entries: ProjectedSessionEntry[], entryInde
 	return -1;
 }
 
+/**
+ * EN: Choose a cut from edited model-visible contributions while retaining raw entry ids. Never start with
+ * a tool result. A closed suffix of omitted recovery attempts can move the boundary past failed history,
+ * but arbitrary metadata cannot discard unsent input.
+ *
+ * ZH: 依据编辑后的模型可见内容选择截断点，同时保留原始条目 ID。保留区绝不从工具结果开始。由已省略恢复尝试构成的封闭尾部可使边界越过失败历史，但普通元数据不能导致未发送输入被丢弃。
+ */
 function findProjectedCutPoint(
 	entries: ProjectedSessionEntry[],
 	startIndex: number,
@@ -869,6 +907,13 @@ function findProjectedCutPoint(
 	};
 }
 
+/**
+ * EN: Build the canonical projection first, then split visible history into summary input, an optional turn
+ * prefix, and a retained suffix. Carry forward the previous summary and file-operation evidence. Return
+ * undefined for a fresh checkpoint or when no visible content can be summarized.
+ *
+ * ZH: 先建立权威投影，再把可见历史分成摘要输入、可选的轮次前缀和保留尾部。延续旧摘要与文件操作记录。末尾刚完成压缩，或没有可摘要的可见内容时返回 undefined。
+ */
 export function prepareCompaction(
 	pathEntries: SessionEntry[],
 	settings: CompactionSettings,
@@ -955,12 +1000,11 @@ Create a concise checkpoint of the user's request and the progress shown above. 
 Only summarize information explicitly present above. Do not infer or recreate later messages.`;
 
 /**
- * Generate summaries for compaction using prepared data.
- * Returns CompactionResult - SessionManager adds uuid/parentUuid when saving.
+ * EN: Generate a prepared checkpoint without writing the session. A split turn may need a history summary
+ * and a separate prefix summary; combine their text and usage, then append file-operation context.
+ * AgentSession later checks cancellation and SessionManager appends the result.
  *
- * @param preparation - Pre-calculated preparation from prepareCompaction()
- * @param customInstructions - Optional custom focus for the summary
- * @param sessionId - Optional routing session ID forwarded without enabling prompt caching
+ * ZH: 生成已准备的检查点，但不写会话。拆分轮次时可能需要历史摘要和独立的前缀摘要，合并文本与用量后加入文件操作上下文。随后由 AgentSession 检查取消，再由 SessionManager 追加结果。
  */
 export async function compact(
 	preparation: CompactionPreparation,

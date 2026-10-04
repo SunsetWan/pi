@@ -38,6 +38,13 @@ import { getBranchSelection } from "./virtual-models.ts";
 // provider-agnostic and does not import pi-ai/compat itself.
 setDefaultStreamFn(streamSimple);
 
+/**
+ * EN: Composition inputs for a coding session. Supply managers and a loaded resourceLoader to control
+ * persistence, configuration, models, and extensions. An explicit tools list is an allowlist; excludeTools
+ * applies after it.
+ *
+ * ZH: 编码会话的组装参数。注入各个 manager 和已加载的 resourceLoader，可控制持久化、配置、模型与扩展。显式 tools 列表是允许列表，excludeTools 在其后生效。
+ */
 export interface CreateAgentSessionOptions {
 	/** Working directory for project-local discovery. Default: process.cwd() */
 	cwd?: string;
@@ -89,7 +96,12 @@ export interface CreateAgentSessionOptions {
 	sessionStartEvent?: SessionStartEvent;
 }
 
-/** Result from createAgentSession */
+/**
+ * EN: The assembled session plus extension resources and an optional model-restore warning. Creation can
+ * succeed without a usable model; prompt() performs the final model and authentication checks.
+ *
+ * ZH: 返回组装后的会话、扩展资源，以及可选的模型恢复警告。即使没有可用模型，创建也可能成功；prompt() 才执行最终的模型与认证检查。
+ */
 export interface CreateAgentSessionResult {
 	/** The created session */
 	session: AgentSession;
@@ -138,39 +150,25 @@ function getDefaultAgentDir(): string {
 }
 
 /**
- * Create an AgentSession with the specified options.
+ * EN: Compose the application around Agent: resolve paths and managers, load resources when no loader was
+ * supplied, restore the current session branch, select a model and thinking level, then install request and
+ * extension adapters.
  *
- * @example
- * ```typescript
- * // Minimal - uses defaults
- * const { session } = await createAgentSession();
+ * ZH: 围绕 Agent 组装应用：解析路径与 manager，在未注入 loader 时加载资源，恢复当前会话分支，选择模型和思考级别，再安装请求与扩展适配器。
  *
- * // With explicit model
- * import { getModel } from '@earendil-works/pi-ai';
- * const { session } = await createAgentSession({
- *   model: getModel('anthropic', 'claude-opus-4-5'),
- *   thinkingLevel: 'high',
- * });
+ * EN: Agent owns the loop. ModelRuntime owns provider dispatch and authentication. AgentSession adds tools,
+ * persistence, retries, compaction, and extension boundaries. The stream adapter calls
+ * modelRuntime.streamSimple(), not a global provider registry.
  *
- * // Continue previous session
- * const { session, modelFallbackMessage } = await createAgentSession({
- *   continueSession: true,
- * });
+ * ZH: Agent 管理循环；ModelRuntime 管理 Provider 分发与认证；AgentSession 加入工具、持久化、重试、压缩及扩展边界。流适配器调用
+ * modelRuntime.streamSimple()，并非全局 Provider 注册表。
  *
- * // Full control
- * const loader = new DefaultResourceLoader({
- *   cwd: process.cwd(),
- *   agentDir: getAgentDir(),
- *   settingsManager: SettingsManager.create(),
- * });
- * await loader.reload();
- * const { session } = await createAgentSession({
- *   model: myModel,
- *   tools: ["read", "bash"],
- *   resourceLoader: loader,
- *   sessionManager: SessionManager.inMemory(),
- * });
- * ```
+ * EN: To resume, pass a SessionManager opened on the desired file or branch. To avoid session-file writes,
+ * use SessionManager.inMemory(). A supplied resourceLoader must already be loaded. Bind extension UI and
+ * command actions separately with session.bindExtensions().
+ *
+ * ZH: 续跑时传入已打开目标文件或分支的 SessionManager。若不需要会话文件写入，使用 SessionManager.inMemory()。注入的 resourceLoader
+ * 必须已完成加载；扩展的 UI 与命令操作通过 session.bindExtensions() 另行绑定。
  */
 export async function createAgentSession(options: CreateAgentSessionOptions = {}): Promise<CreateAgentSessionResult> {
 	const cwd = resolvePath(options.cwd ?? options.sessionManager?.getCwd() ?? process.cwd());

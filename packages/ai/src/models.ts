@@ -131,15 +131,16 @@ function withKnownModelTypes(entry: ModelsStoreEntry): ModelsStoreEntry {
 type ProviderModel<TApi extends Api> = Model<TApi> | ImageModel<ImageApi> | ClassifierModel<ClassifierApi>;
 
 /**
- * A provider is the concrete runtime unit. It owns id/name/base metadata,
- * auth methods, model listing, and the operations its models support
- * (streaming, image generation, classification).
+ * EN: Concrete provider runtime: identity, auth methods, last-known model catalog, and supported
+ * operations. A model's provider id selects this object, while its api selects a protocol implementation
+ * inside the provider.
  *
- * `TApi` lets concrete provider factories declare which chat APIs their models
- * use (e.g. `openaiProvider(): Provider<"openai-responses" | "openai-completions">`),
- * giving typed chat model lists to direct factory users. Other model types use
- * their operation-specific API unions. Inside a `Models` collection providers
- * are held as `Provider<Api>`.
+ * ZH: 具体 Provider 运行时，包含身份、认证方法、最近已知模型目录与支持的操作。模型的 provider ID 选择此对象，api 则选择 Provider 内部的协议实现。
+ *
+ * EN: Every provider has auth semantics, including keyless local providers. Synchronous model reads must
+ * not throw. Models supplies normalized transcripts and resolved request credentials before dispatch.
+ *
+ * ZH: 每个 Provider 都有认证语义，包括无需密钥的本地 Provider。同步读取模型不应抛错。Models 在分派前提供规范化对话记录与解析后的请求凭据。
  */
 export interface Provider<TApi extends Api = Api> {
 	readonly id: string;
@@ -233,13 +234,17 @@ export interface Provider<TApi extends Api = Api> {
 }
 
 /**
- * Runtime collection of providers plus auth application and request
- * convenience. Providers own request behavior; `Models` resolves auth and
- * delegates each request to the provider that owns the model.
+ * EN: Instance-scoped provider collection and request facade. Resolve auth, normalize context, and delegate
+ * to the model's provider. Register providers with createModels().setProvider() before sending a request.
  *
- * Read accessors come in three flavors: the unqualified ones (`getModels`,
- * `getModel`, `getAvailable`) return chat models, the `*OfType` accessors
- * return one model type, and `getAllModels`/`getAllAvailable` return every type.
+ * ZH: 实例范围的 Provider 集合和请求入口。负责解析认证、规范化上下文，并委派给模型所属 Provider。发起请求前需通过 createModels().setProvider() 注册
+ * Provider。
+ *
+ * EN: Unqualified catalog reads return chat models; OfType reads select one operation type; All reads
+ * include every type. complete methods consume the same stream protocol and return its final
+ * AssistantMessage.
+ *
+ * ZH: 不带类型限定的目录读取返回聊天模型，OfType 选择一种操作类型，All 包含所有类型。complete 方法消费同一流式协议，并返回最终 AssistantMessage。
  */
 export interface Models {
 	getProviders(): readonly Provider[];
@@ -319,6 +324,13 @@ export interface Models {
 		options?: ModelsApiStreamOptions<TApi>,
 	): Promise<AssistantMessage>;
 
+	/**
+	 * EN: Send a chat request with provider-neutral options. The returned stream exists immediately while
+	 * authentication and provider setup finish asynchronously. Read its final stopReason to distinguish success
+	 * from a streamed error.
+	 *
+	 * ZH: 使用 Provider 无关选项发起聊天请求。流对象立即返回，认证和 Provider 准备在其后异步完成。通过最终 stopReason 区分成功与流内错误。
+	 */
 	streamSimple(model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions): AssistantMessageEventStream;
 	completeSimple(model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions): Promise<AssistantMessage>;
 	streamDeferred(
@@ -381,6 +393,12 @@ function mergeHeaders(
 	return merged;
 }
 
+/**
+ * EN: Runtime implementation behind createModels. For the learning path, follow streamSimple into applyAuth
+ * and lazyStream; provider refresh and credential mutation form separate lifecycle paths.
+ *
+ * ZH: createModels 背后的运行时实现。学习主线可从 streamSimple 进入 applyAuth 和 lazyStream；Provider 刷新与凭据修改属于另外的生命周期路径。
+ */
 class ModelsImpl implements MutableModels {
 	private providers = new Map<string, Provider>();
 	private credentials: CredentialStore;
@@ -834,6 +852,13 @@ class ModelsImpl implements MutableModels {
 		return this.requireProvider(model);
 	}
 
+	/**
+	 * EN: Assemble one provider request from stored/provider auth and caller overrides. Caller values win per
+	 * field, header names merge case-insensitively, and transformHeaders runs last. An auth-selected endpoint
+	 * replaces the request model endpoint.
+	 *
+	 * ZH: 从存储或 Provider 认证与调用者覆盖值组装一次请求。调用者按字段优先，Header 名称不区分大小写合并，transformHeaders 最后运行。认证选择的端点会替换本次请求模型的端点。
+	 */
 	private async applyAuth<
 		TModel extends AnyModel,
 		TOptions extends ProviderRequestOptions<TModel> & ModelsRequestTransforms,
@@ -892,6 +917,13 @@ class ModelsImpl implements MutableModels {
 		return this.stream(model, context, options).result();
 	}
 
+	/**
+	 * EN: Normalize the caller's context, then defer provider lookup and auth behind lazyStream. Dispatch only
+	 * after request credentials are ready. Setup failures become stream error events instead of escaping the
+	 * asynchronous setup promise.
+	 *
+	 * ZH: 规范化调用者上下文，再通过 lazyStream 延后查找 Provider 和解析认证。凭据准备好后才分派请求。准备失败会成为流式 error 事件，而不是从异步准备 Promise 直接逸出。
+	 */
 	streamSimple(model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions): AssistantMessageEventStream {
 		const transcript = normalizeContext(context);
 		return lazyStream(model, async () => {
@@ -982,6 +1014,13 @@ class ModelsImpl implements MutableModels {
 	}
 }
 
+/**
+ * EN: Create an isolated mutable provider collection. Defaults use in-memory credential and catalog stores.
+ * No provider is registered automatically; the host explicitly chooses factories and persistence
+ * dependencies.
+ *
+ * ZH: 创建隔离的可变 Provider 集合。默认凭据和目录存储均在内存中。不会自动注册 Provider，宿主需要显式选择工厂及持久化依赖。
+ */
 export function createModels(options?: CreateModelsOptions): MutableModels {
 	return new ModelsImpl(options);
 }
@@ -1024,12 +1063,17 @@ export interface CreateProviderOptions<TApi extends Api = Api> {
 }
 
 /**
- * Builds a provider from parts. Built-in provider factories and models.json
- * custom providers both go through this. A single `api` streams all chat
- * models; an `api` map dispatches on `model.api`, and a model whose api has
- * no entry produces a stream error. One-shot operation maps dispatch on
- * `model.api` the same way. At least one concrete implementation across
- * `api`/`images`/`classifiers` is required; empty maps are rejected.
+ * EN: Assemble auth, catalog, and API implementations into a Provider. A single stream implementation
+ * handles all chat models; an API map dispatches by model.api. At least one nonempty chat, image, or
+ * classifier implementation is required.
+ *
+ * ZH: 把认证、模型目录和 API 实现组装为 Provider。单个流式实现处理全部聊天模型，API 映射则按 model.api 分派。聊天、图像或分类实现至少需要一种非空配置。
+ *
+ * EN: Dynamic models overlay the static baseline by type and id. Catalog publication is delegated through
+ * the refresh context. A missing chat API produces a stream error instead of selecting an unrelated
+ * adapter.
+ *
+ * ZH: 动态模型按类型与 ID 覆盖静态基线。目录发布通过刷新上下文委派。聊天 API 缺失时生成流内错误，而不会改用无关适配器。
  */
 export function createProvider<TApi extends Api = Api>(input: CreateProviderOptions<TApi>): Provider<TApi> {
 	const single =

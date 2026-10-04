@@ -93,7 +93,14 @@ export interface BashOperations {
 	) => Promise<{ exitCode: number | null }>;
 }
 
-/** Shared process execution used by the built-in shell tools. */
+/**
+ * EN: Local process boundary: validate timeout and cwd, spawn the configured shell, merge stdout/stderr
+ * through onData, and wait for termination. Abort and timeout kill the process tree; signal exits map to
+ * the shell convention 128 plus signal number.
+ *
+ * ZH: 本地进程边界：验证超时与工作目录，启动配置的 shell，通过 onData 合并 stdout 和 stderr，并等待退出。取消和超时会终止进程树；信号退出按 shell 惯例映射为 128
+ * 加信号编号。
+ */
 export function createLocalShellOperations(shellName: string, resolveShellConfig: () => ShellConfig): BashOperations {
 	return {
 		exec: async (command, cwd, { onData, signal, timeout, env }) => {
@@ -240,6 +247,19 @@ export interface ShellToolConfig {
 	tempFilePrefix: string;
 }
 
+/**
+ * EN: Wrap shell execution as a tool. Apply command prefix and spawn hooks, stream throttled output
+ * snapshots, then return a bounded model-facing tail plus structured output for programmatic callers.
+ * Truncated output can be stored in a temporary file.
+ *
+ * ZH: 把 shell 执行包装为工具。应用命令前缀和 spawn hook，以节流快照发送输出，最终返回受限的模型可见尾部，以及供程序调用者使用的结构化输出。截断的输出可保存到临时文件。
+ *
+ * EN: A nonzero exit returns isError with its structured result. Abort, timeout, or missing exit code
+ * throws; the Agent pipeline converts these failures. The structured output has its own one-MiB limit,
+ * separate from the shorter model text.
+ *
+ * ZH: 非零退出码返回带结构化结果的 isError。取消、超时或缺失退出码会抛出错误，由 Agent 流水线转换。结构化输出有独立的 1 MiB 上限，与更短的模型文本上限分开。
+ */
 export function createShellToolDefinition(
 	cwd: string,
 	config: ShellToolConfig,
@@ -424,6 +444,12 @@ const bashToolConfig: ShellToolConfig = {
 	tempFilePrefix: "pi-bash",
 };
 
+/**
+ * EN: Specialize the shared shell definition with bash naming and prompt guidance. PowerShell can reuse the
+ * same execution/result structure with different shell configuration.
+ *
+ * ZH: 用 bash 的名称和提示词指导具体化共享 shell 定义。PowerShell 可用不同 shell 配置复用同一执行与结果结构。
+ */
 export function createBashToolDefinition(
 	cwd: string,
 	options?: BashToolOptions,
@@ -431,6 +457,13 @@ export function createBashToolDefinition(
 	return createShellToolDefinition(cwd, bashToolConfig, options);
 }
 
+/**
+ * EN: Adapt the bash definition to AgentTool and retain its prompt contribution metadata. Direct callers
+ * still need the Agent pipeline if they want schema validation, extension interception, and standard error
+ * events.
+ *
+ * ZH: 将 bash 定义适配为 AgentTool，并保留提示词贡献元数据。直接调用者若需要 schema 验证、扩展拦截和标准错误事件，仍需经过 Agent 流水线。
+ */
 export function createBashTool(cwd: string, options?: BashToolOptions): AgentTool<typeof bashSchema> {
 	const definition = createBashToolDefinition(cwd, options);
 	const tool = wrapToolDefinition(definition);

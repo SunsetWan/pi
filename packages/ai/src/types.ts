@@ -278,12 +278,15 @@ export type ApiStreamOptions<TApi extends Api> = TApi extends keyof ApiOptionsMa
 	: StreamOptions & Record<string, unknown>;
 
 /**
- * The uniform stream contract of an API implementation module: every module
- * under `src/api/` exports `stream` and `streamSimple`; capable modules may also
- * export deferred-response methods. Lazy wrappers (`lazyApi()`) and provider
- * factories pass these around as values. This is the untyped dispatch shape;
- * per-API option typing lives on the implementation modules themselves and on
- * `Provider.stream()` via `ApiStreamOptions`.
+ * EN: Uniform dispatch contract for chat API adapters. stream accepts API-specific settings; streamSimple
+ * accepts shared settings. Both receive a normalized transcript and return the same event protocol.
+ *
+ * ZH: 聊天 API 适配器的统一分派契约。stream 接收 API 专用设置，streamSimple 接收通用设置；二者均接收规范化对话记录，并返回同一种事件协议。
+ *
+ * EN: Concrete adapters retain their own option types. Provider factories and lazy wrappers use this common
+ * interface to route calls without importing every SDK eagerly.
+ *
+ * ZH: 具体适配器仍保留自己的配置类型。Provider 工厂和延迟加载包装器通过此公共接口路由调用，无需提前加载所有 SDK。
  */
 export interface ProviderStreams {
 	stream(model: Model<Api>, context: TranscriptContext, options?: StreamOptions): AssistantMessageEventStream;
@@ -349,6 +352,12 @@ export interface AnthropicAllowedFallbackModel {
 }
 
 // Unified options with reasoning passed to streamSimple() and completeSimple()
+/**
+ * EN: Provider-neutral request settings. Adapters map the shared reasoning and tool-choice values to native
+ * request fields; support still depends on the selected model and API.
+ *
+ * ZH: 与 Provider 无关的请求设置。适配器把通用 reasoning 和工具选择值映射到原生请求字段；具体支持能力仍由所选模型和 API 决定。
+ */
 export interface SimpleStreamOptions extends StreamOptions {
 	/** Provider-neutral tool selection for simple requests. When omitted, adapters use provider-specific behavior. */
 	toolChoice?: ToolChoice;
@@ -394,12 +403,24 @@ export interface TextSignatureV1 {
 	phase?: "commentary" | "final_answer";
 }
 
+/**
+ * EN: One text block in a message. textSignature preserves provider-specific replay metadata; it is not
+ * text for display.
+ *
+ * ZH: 消息中的一个文本块。textSignature 保存 Provider 专用的重放元数据，不是用于展示的正文。
+ */
 export interface TextContent {
 	type: "text";
 	text: string;
 	textSignature?: string; // e.g., for OpenAI responses, message metadata (legacy id string or TextSignatureV1 JSON)
 }
 
+/**
+ * EN: Reasoning content with optional opaque replay data. A redacted block may carry only a signature;
+ * preserve it for provider continuity instead of inventing visible reasoning text.
+ *
+ * ZH: 推理内容及可选的不透明重放数据。被隐藏的块可能只有签名，应保留它以维持 Provider 连续性，而不是自行补造可见推理文本。
+ */
 export interface ThinkingContent {
 	type: "thinking";
 	thinking: string;
@@ -416,6 +437,12 @@ export interface ImageContent {
 	mimeType: string; // e.g., "image/jpeg", "image/png"
 }
 
+/**
+ * EN: Assistant request to invoke a named tool. id connects the call to its toolResult message. Streamed
+ * arguments may still be partial; the agent validates finalized arguments before execution.
+ *
+ * ZH: assistant 请求调用命名工具的内容块。id 把调用与 toolResult 消息关联起来。流式阶段的 arguments 可能尚未完整，Agent 会在执行前验证最终参数。
+ */
 export interface ToolCall {
 	type: "toolCall";
 	id: string;
@@ -449,6 +476,12 @@ export interface Usage {
 	};
 }
 
+/**
+ * EN: Normalized response status. pending is unfinished; stop, length, and toolUse describe completed
+ * generation. error and aborted are failure exits; deferred carries a handle for later retrieval.
+ *
+ * ZH: 规范化响应状态。pending 表示尚未完成；stop、length 和 toolUse 描述生成结束原因；error 与 aborted 表示失败退出；deferred 携带可供之后取回结果的句柄。
+ */
 export type StopReason = "pending" | "stop" | "length" | "toolUse" | "error" | "aborted" | "deferred";
 
 export type JsonValue = null | boolean | number | string | readonly JsonValue[] | JsonObject;
@@ -512,14 +545,16 @@ export interface DeferredHandle {
 }
 
 /**
- * System instructions and tool declarations at one point in the transcript.
+ * EN: Prompt and tool state at a point in the transcript. The leading message defines the baseline. Later
+ * content appends instructions, named sections replace or remove sections, and tool deltas update
+ * declarations.
  *
- * The leading system message is the system prompt. Later system messages change it:
- * `content` adds instructions from that point on, `sections` replace or remove named
- * prompt sections, and `toolsAdded`/`toolsRemoved` change the tool set. Replaying
- * every system message in order yields the current prompt and tools. Providers that
- * accept system messages mid-conversation send each one in place; other providers
- * rebuild the leading system message from the replayed state.
+ * ZH: 对话历史某个位置的提示词与工具状态。首条消息定义基线；后续 content 追加指令，命名 sections 替换或删除段落，工具增量更新声明。
+ *
+ * EN: Replay messages in order to obtain the current prompt and tools. Adapters keep these changes in place
+ * when supported, otherwise collapse them into a leading system message.
+ *
+ * ZH: 按顺序重放消息可得到当前提示词和工具。适配器在协议支持时保留这些变化的位置，否则将它们折叠到首条 system 消息中。
  */
 export interface SystemMessage {
 	role: "system";
@@ -539,12 +574,29 @@ export interface SystemMessage {
 	timestamp: number; // Unix timestamp in milliseconds
 }
 
+/**
+ * EN: User input with text or multimodal content and a millisecond timestamp. The agent normalizes a string
+ * prompt into this role before emitting message lifecycle events.
+ *
+ * ZH: 包含文本或多模态内容以及毫秒时间戳的用户输入。Agent 先把字符串 prompt 规范化为该角色，再发出消息生命周期事件。
+ */
 export interface UserMessage {
 	role: "user";
 	content: string | (TextContent | ImageContent)[];
 	timestamp: number; // Unix timestamp in milliseconds
 }
 
+/**
+ * EN: Shared model response representation. content contains text, reasoning, and tool calls; usage and
+ * stopReason describe the outcome. This shape also represents partial responses and error results.
+ *
+ * ZH: 统一的模型响应表示。content 包含文本、推理与工具调用，usage 和 stopReason 描述结果。部分响应和错误结果也使用这个结构。
+ *
+ * EN: Provider/model identifiers and signatures support tracing and replay. endTurn is diagnostic metadata
+ * and does not by itself control the agent loop.
+ *
+ * ZH: Provider、模型标识与签名支持追踪和重放。endTurn 是诊断元数据，本身不控制 Agent 循环。
+ */
 export interface AssistantMessage {
 	role: "assistant";
 	content: (TextContent | ThinkingContent | ToolCall)[];
@@ -593,6 +645,13 @@ export interface NestedToolCalls {
 	complete: boolean;
 }
 
+/**
+ * EN: Transcript result associated with a toolCallId. content is model-facing, while details and nested
+ * call records support the host. isError distinguishes failure from ordinary output, including text that
+ * happens to describe an error.
+ *
+ * ZH: 通过 toolCallId 关联调用的工具结果消息。content 面向模型，details 和嵌套调用记录服务于宿主。isError 区分失败与普通输出，不能仅靠正文中出现错误描述来判断。
+ */
 export type ToolResultMessage<TDetails = JsonValue> = IsJsonCompatible<TDetails> extends true
 	? {
 			role: "toolResult";
@@ -609,6 +668,12 @@ export type ToolResultMessage<TDetails = JsonValue> = IsJsonCompatible<TDetails>
 		}
 	: never;
 
+/**
+ * EN: Closed set of model-facing roles: system, user, assistant, and toolResult. Agent Core adds
+ * application roles separately and converts them before crossing this boundary.
+ *
+ * ZH: 模型侧的封闭角色集合：system、user、assistant、toolResult。Agent Core 在另一层扩展应用角色，并在跨越此边界前转换它们。
+ */
 export type Message = SystemMessage | UserMessage | AssistantMessage | ToolResultMessage;
 
 export type ImagesInputContent = TextContent | ImageContent;
@@ -714,6 +779,12 @@ export type ConstrainedSamplingConfig =
 			variants: GrammarVariants;
 	  };
 
+/**
+ * EN: Model-visible declaration: name, description, input schema, and optional constrained sampling. It
+ * contains no execute function. AgentTool adds the host implementation at the agent layer.
+ *
+ * ZH: 模型可见的工具声明：名称、描述、输入 schema 和可选约束采样设置。这里没有 execute 函数，AgentTool 在 Agent 层补上宿主执行实现。
+ */
 export interface Tool<TParameters extends TSchema = TSchema> {
 	name: string;
 	description: string;
@@ -726,10 +797,10 @@ export interface ToolReference {
 }
 
 /**
- * Request input accepted by the public stream entry points (`Models.stream()`,
- * `streamSimple()`, ...). `systemPrompt` and `tools` are shorthand for a leading
- * system message; `normalizeContext()` folds them into one before the request
- * reaches a provider.
+ * EN: Convenience input accepted by Models. systemPrompt and tools are shorthand fields; normalizeContext
+ * folds them into a leading system message before provider dispatch.
+ *
+ * ZH: Models 接收的便捷输入。systemPrompt 和 tools 是简写字段；normalizeContext 会在分派给 Provider 前将它们合入首条 system 消息。
  */
 export interface Context {
 	systemPrompt?: string;
@@ -740,10 +811,12 @@ export interface Context {
 declare const transcriptContextBrand: unique symbol;
 
 /**
- * Normalized request context passed to providers and API implementations. The
- * prompt and tool declarations are carried by the transcript's system messages.
- * Only `normalizeContext()` produces this type, so a raw `Context` cannot reach
- * provider code by accident.
+ * EN: Provider-facing context produced by normalizeContext. System messages carry the prompt and tool
+ * declarations. The unique-symbol brand prevents a plain Context from being passed here accidentally at
+ * compile time.
+ *
+ * ZH: 由 normalizeContext 产生、面向 Provider 的上下文。system 消息携带提示词和工具声明。unique symbol 品牌类型在编译期防止把普通 Context
+ * 意外传到此处。
  */
 export type TranscriptContext = {
 	messages: Message[];
@@ -751,20 +824,19 @@ export type TranscriptContext = {
 };
 
 /**
- * Event protocol for AssistantMessageEventStream.
+ * EN: Streaming protocol shared by providers. A successful request emits start, block start/delta/end
+ * events, and done. Setup may fail with error before start; failures after start also end with error.
+ * Updates and done cannot precede start.
  *
- * Successful streams emit `start` before partial updates and terminate with
- * `done`. A stream may terminate directly with `error` when request setup fails
- * before generation starts; after `start`, failures also terminate with `error`.
- * Direct `streamSimple()` calls throw synchronously when request auth is missing.
- * Updates and `done` must never appear before `start`.
+ * ZH: Provider 共享的流式协议。成功请求依次发出 start、内容块 start/delta/end 及 done。准备阶段可以在 start 前直接 error；开始后的失败也以 error
+ * 结束。更新和 done 不能早于 start。
  *
- * `partial` is the shared live response-so-far helper, not an event-time
- * snapshot. Text and thinking blocks are empty when their `*_start` event is
- * emitted and grow only through their corresponding `*_delta` events until the
- * authoritative `*_end`. Redacted thinking may be complete at start and emit no
- * deltas. Tool-call arguments at `toolcall_start` are provider-specific;
- * `toolcall_delta` carries subsequent JSON updates.
+ * EN: partial is a live response object, not a historical snapshot. Text/thinking grow through deltas until
+ * their authoritative end event; redacted thinking can start complete. Initial tool arguments vary by
+ * provider. Direct adapter streamSimple calls may throw for missing auth.
+ *
+ * ZH: partial 是实时响应对象，而不是历史快照。文本和推理通过 delta 增长，直到权威的 end 事件；被隐藏的推理可在开始时已完整。工具初始参数因 Provider 而异。直接调用适配器
+ * streamSimple 时，认证缺失可能同步抛错。
  */
 export type AssistantMessageEvent =
 	| { type: "start"; partial: AssistantMessage }
@@ -1109,7 +1181,13 @@ export interface BaseModel<TApi extends string> {
 	headers?: Record<string, string>;
 }
 
-/** Chat model: usable with `stream()` and friends. */
+/**
+ * EN: Chat model metadata used for dispatch and request limits. provider selects the registered runtime;
+ * api selects its wire adapter. Thinking maps, compatibility flags, and token limits guide request
+ * preparation rather than performing inference themselves.
+ *
+ * ZH: 用于请求分派与限制的聊天模型元数据。provider 选择已注册运行时，api 选择协议适配器。思考映射、兼容标记与 token 限制指导请求准备，本身不执行推理。
+ */
 export interface Model<TApi extends Api> extends BaseModel<TApi> {
 	/**
 	 * Optional: chat is the default model type, so models without `type` are chat

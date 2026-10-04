@@ -114,6 +114,12 @@ function getPromptCacheOptions(
 }
 
 // OpenAI Responses-specific options
+/**
+ * EN: Responses-native controls added to common stream settings. streamSimple maps shared reasoning options
+ * into this shape; direct stream callers can choose native effort, summary, service tier, and tool choice.
+ *
+ * ZH: 在公共流设置上增加的 Responses 原生选项。streamSimple 把通用思考设置映射成此结构；直接调用 stream 的调用者可以指定原生 effort、summary、服务层级及工具选择。
+ */
 export interface OpenAIResponsesOptions extends StreamOptions {
 	reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	reasoningSummary?: "auto" | "detailed" | "concise" | null;
@@ -122,7 +128,18 @@ export interface OpenAIResponsesOptions extends StreamOptions {
 }
 
 /**
- * Generate function for OpenAI Responses API
+ * EN: Own one Responses request from payload construction to terminal assistant event. Resolve transcript
+ * compatibility, build the client and payload, apply request hooks, then feed SDK events into
+ * processResponsesStream.
+ *
+ * ZH: 管理一次 Responses 请求，从构造负载到发送 assistant 终止事件。协调对话协议兼容性，创建客户端和负载，执行请求 hook，再把 SDK 事件交给
+ * processResponsesStream。
+ *
+ * EN: A transport EOF alone is not success: require a terminal response and a final stop reason. Remove
+ * parser scratch fields on failure and emit an error or aborted message so partial output remains
+ * inspectable.
+ *
+ * ZH: 仅传输流结束并不代表成功：还需要终止响应事件与最终停止原因。失败时移除解析临时字段，发出 error 或 aborted 消息，使部分输出仍可检查。
  */
 export const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions> = (
 	model: Model<"openai-responses">,
@@ -235,6 +252,13 @@ export const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions> 
 	return stream;
 };
 
+/**
+ * EN: Map shared options to OpenAI Responses options, clamp reasoning to model support, and call stream.
+ * Direct invocation validates credentials synchronously; the Models facade wraps this setup in an
+ * error-producing stream.
+ *
+ * ZH: 把通用选项映射为 OpenAI Responses 选项，按模型能力调整思考级别，再调用 stream。直接调用会同步验证凭据；Models 入口则把此准备过程包装成可发出错误的流。
+ */
 export const streamSimple: StreamFunction<"openai-responses", SimpleStreamOptions> = (
 	model: Model<"openai-responses">,
 	context: TranscriptContext,
@@ -255,6 +279,13 @@ export const streamSimple: StreamFunction<"openai-responses", SimpleStreamOption
 	} satisfies OpenAIResponsesOptions);
 };
 
+/**
+ * EN: Configure the SDK endpoint and headers for this request. Provider/model defaults and session affinity
+ * are applied first; request headers override them. This function builds a client and does not submit the
+ * response request.
+ *
+ * ZH: 配置本次请求的 SDK 端点与 Header。先应用 Provider/模型默认值和会话亲和设置，再由请求 Header 覆盖。此函数仅构造客户端，不提交响应请求。
+ */
 function createClient(
 	model: Model<"openai-responses">,
 	context: TranscriptContext,
@@ -299,6 +330,18 @@ function createClient(
 	});
 }
 
+/**
+ * EN: Translate transcript messages, declared tools, reasoning, and caching preferences into a streaming
+ * Responses payload. Compatibility metadata controls which native fields are valid for the selected model
+ * and credential route.
+ *
+ * ZH: 把对话消息、工具声明、思考和缓存偏好转换成流式 Responses 负载。兼容元数据决定当前模型和凭据路径允许哪些原生字段。
+ *
+ * EN: Sampling parameters merge last and may override named fields. Tool declarations are schema-only;
+ * execution remains in Agent Core after the returned assistant message is finalized.
+ *
+ * ZH: 采样参数最后合并，可能覆盖具名字段。工具声明仅包含 schema，执行仍由 Agent Core 在返回的 assistant 消息完成后负责。
+ */
 function buildParams(
 	model: Model<"openai-responses">,
 	context: TranscriptContext,

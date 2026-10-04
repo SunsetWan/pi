@@ -17,18 +17,18 @@ import type {
 import type { Static, TSchema } from "typebox";
 
 /**
- * Stream function used by the agent loop. `Models.streamSimple` satisfies
- * this shape.
+ * EN: Model boundary used by the loop. `Models.streamSimple` satisfies this contract. The normalized
+ * transcript carries the system prompt and tool declarations in system messages, not separate context
+ * fields.
  *
- * The loop passes a normalized transcript: the system prompt and tool
- * declarations are carried by the transcript's system messages, never by
- * `context.systemPrompt` or `context.tools`.
+ * ZH: 循环调用模型的边界。Models.streamSimple 满足此契约。规范化对话记录通过 system 消息携带提示词和工具声明，而不是使用上下文上的独立字段。
  *
- * Contract:
- * - Must not throw or return a rejected promise for request/model/runtime failures.
- * - Must return an AssistantMessageEventStream.
- * - Failures must be encoded in the returned stream via protocol events and a
- *   final AssistantMessage with stopReason "error" or "aborted" and errorMessage.
+ * EN: Return an AssistantMessageEventStream, directly or through a promise. Encode request, model, and
+ * runtime failures as error/aborted protocol events with a final message and errorMessage; do not throw or
+ * reject for those failures.
+ *
+ * ZH: 直接或通过 Promise 返回 AssistantMessageEventStream。请求、模型和运行时失败应编码成 error/aborted 协议事件，并带最终消息与
+ * errorMessage；这些失败不应直接抛出或拒绝。
  */
 export type StreamFn = (
 	model: Model<Api>,
@@ -37,20 +37,19 @@ export type StreamFn = (
 ) => AssistantMessageEventStream | Promise<AssistantMessageEventStream>;
 
 /**
- * Configuration for how tool calls from a single assistant message are executed.
+ * EN: Batch scheduling policy. Sequential mode completes each call before the next. Parallel mode validates
+ * calls in order, executes allowed calls together, reports completion immediately, and records result
+ * messages in original call order.
  *
- * - "sequential": each tool call is prepared, executed, and finalized before the next one starts.
- * - "parallel": tool calls are prepared sequentially, then allowed tools execute concurrently.
- *   `tool_execution_end` is emitted in tool completion order after each tool is finalized,
- *   while tool-result message artifacts are emitted later in assistant source order.
+ * ZH: 工具批次的调度策略。串行模式完成一个调用后再开始下一个；并行模式按顺序验证、并发执行获准调用、即时报告完成，并按原始调用顺序记录结果消息。
  */
 export type ToolExecutionMode = "sequential" | "parallel";
 
 /**
- * Controls how many queued user messages are injected when the agent loop reaches a queue drain point.
+ * EN: Number of input messages consumed at a queue drain point. all consumes the current queue;
+ * one-at-a-time consumes its oldest message and retains the rest for later polls.
  *
- * - "all": drain and inject every queued message at that point.
- * - "one-at-a-time": drain and inject only the oldest queued message, leaving the rest queued for later drain points.
+ * ZH: 队列消费点一次投递的消息数量。all 消费当前全部队列；one-at-a-time 只取最早的一条，其余保留到后续轮询。
  */
 export type QueueMode = "all" | "one-at-a-time";
 
@@ -58,10 +57,11 @@ export type QueueMode = "all" | "one-at-a-time";
 export type AgentToolCall = Extract<AssistantMessage["content"][number], { type: "toolCall" }>;
 
 /**
- * Result returned from `beforeToolCall`.
+ * EN: Optional preflight decision. block prevents execution and creates an error tool result using reason
+ * or a default message. A blocked result may request termination, effective only when every finalized call
+ * in the batch requests it.
  *
- * Returning `{ block: true }` prevents the tool from executing. The loop emits an error tool result instead.
- * `reason` becomes the text shown in that error result. If omitted, a default blocked message is used.
+ * ZH: 可选的预检查决定。block 阻止执行，并使用 reason 或默认文本生成工具错误结果。被阻止的结果可以请求终止，但仅当整批所有已完成调用都请求终止时才生效。
  */
 export interface BeforeToolCallResult {
 	block?: boolean;
@@ -74,20 +74,15 @@ export interface BeforeToolCallResult {
 }
 
 /**
- * Partial override returned from `afterToolCall`.
+ * EN: Field-level override of an executed result. Provided content, details, isError, usage, and terminate
+ * replace their fields; omitted fields retain existing values. No deep merge occurs.
  *
- * Merge semantics are field-by-field:
- * - `content`: if provided, replaces the tool result content array in full
- * - `details`: if provided, replaces the tool result details value in full
- * - `isError`: if provided, replaces the tool result error flag
- * - `usage`: if provided, replaces the tool result usage
- * - `terminate`: if provided, replaces the early-termination hint
- * - `structuredContent`: if provided, replaces the structured content. If `content` is provided
- *   without it, the structured content is dropped, because it may no longer match the content.
- *   Return it along with `content` to keep it.
+ * ZH: 对已执行结果进行字段级覆盖。提供的 content、details、isError、usage 和 terminate 替换对应字段；未提供的字段沿用原值，不进行深层合并。
  *
- * Other omitted fields keep the original executed tool result values.
- * There is no deep merge for `content`, `details`, or `usage`.
+ * EN: Provided structuredContent replaces the old value. If content changes without structuredContent, drop
+ * the old structured value because it may no longer describe the visible result.
+ *
+ * ZH: 提供 structuredContent 时会替换旧值。若只改变 content 而未提供 structuredContent，则删除旧结构化值，因为它可能已无法描述当前可见结果。
  */
 export interface AfterToolCallResult {
 	content?: (TextContent | ImageContent)[];
@@ -131,7 +126,12 @@ export interface AfterToolCallContext {
 	context: AgentContext;
 }
 
-/** Context passed to completed-turn callbacks. */
+/**
+ * EN: Completed turn snapshot passed to scheduling hooks. context includes the assistant and tool results.
+ * newMessages includes only this invocation's output and, for a new prompt run, its initial input.
+ *
+ * ZH: 传给调度 hook 的已完成轮次信息。context 包含 assistant 与工具结果；newMessages 仅包含这次循环调用产生的消息，新 prompt 运行还包括其初始输入。
+ */
 export interface AgentTurnContext {
 	/** The assistant message that completed the turn. */
 	message: AssistantMessage;
@@ -147,10 +147,17 @@ export interface AgentTurnContext {
 export type AgentTurnDecision = { action: "continue" } | { action: "end" };
 
 /**
- * Called after a completed assistant turn and all of its tool-result messages, but before `turn_end`.
- * On a normal turn, `{ action: "continue" }` ensures one next provider request. Tool-result, steering, or
- * follow-up scheduling can satisfy that request and adds no extra request; otherwise the loop continues once
- * with the current context. Error and aborted responses remain hard exits.
+ * EN: Run after the assistant and all finalized tool results, before turn_end. Return end to stop
+ * immediately or continue to ensure one more provider request. Existing tool, steering, or follow-up
+ * scheduling can satisfy that request.
+ *
+ * ZH: 在 assistant 与所有工具结果完成后、turn_end 前运行。返回 end 立即结束，返回 continue 保证再发生一次 Provider 请求。现有工具、steering 或
+ * follow-up 调度可以满足这次续跑，不会额外重复请求。
+ *
+ * EN: Returning undefined keeps normal scheduling. Error and aborted responses are hard exits even if this
+ * hook asks to continue.
+ *
+ * ZH: 返回 undefined 保留正常调度。错误和取消响应始终退出，即使这个 hook 要求继续也是如此。
  */
 export type FinishTurn = (
 	turn: AgentTurnContext,
@@ -180,8 +187,10 @@ export interface PrepareRequestContext {
 export type AgentRequestUpdate = Omit<AgentLoopTurnUpdate, "messages">;
 
 /**
- * Called immediately before every conversational provider request, including the first.
- * Pending messages have already been appended and emitted when this callback runs.
+ * EN: Refresh context, model, or thinking settings immediately before every provider request, including the
+ * first. Pending input has already been appended and emitted. The hook does not poll input queues.
+ *
+ * ZH: 在每一次 Provider 请求前刷新上下文、模型或思考设置，包括第一次请求。此时待处理输入已追加并发出事件。这个 hook 不会轮询输入队列。
  */
 export type PrepareRequest = (
 	request: PrepareRequestContext,
@@ -190,6 +199,17 @@ export type PrepareRequest = (
 
 export interface PrepareNextTurnContext extends AgentTurnContext {}
 
+/**
+ * EN: Policies used by the loop, separate from its transcript and executable tools. Read the request hooks
+ * first, then turn scheduling and tool hooks. Context conversion occurs only at the provider boundary.
+ *
+ * ZH: 循环使用的策略，与对话历史及可执行工具分开保存。建议先读请求 hook，再读轮次调度与工具 hook。上下文转换只发生在 Provider 边界。
+ *
+ * EN: Input and conversion callbacks must provide safe fallback values instead of throwing. Raw loop stream
+ * adapters do not recover arbitrary callback rejection into a normal event sequence.
+ *
+ * ZH: 输入及转换回调应提供安全的回退值，而不是抛出异常。原始循环的流适配器不会把任意回调拒绝恢复成正常的事件序列。
+ */
 export interface AgentLoopConfig extends SimpleStreamOptions {
 	model: Model<any>;
 
@@ -367,17 +387,24 @@ export interface CustomAgentMessages {
 }
 
 /**
- * AgentMessage: Union of LLM messages + custom messages.
- * This abstraction allows apps to add custom message types while maintaining
- * type safety and compatibility with the base LLM messages.
+ * EN: Union of standard model messages and application-defined messages. Declaration merging extends
+ * CustomAgentMessages. convertToLlm must translate or filter custom roles before a provider sees them.
+ *
+ * ZH: 标准模型消息与应用自定义消息的联合类型。通过声明合并扩展 CustomAgentMessages；在 Provider 收到消息前，convertToLlm 必须转换或过滤自定义角色。
  */
 export type AgentMessage = Message | CustomAgentMessages[keyof CustomAgentMessages];
 
 /**
- * Public agent state.
+ * EN: Public view of conversation data and current execution. The transcript owns system prompt and tool
+ * declarations; tools holds executable implementations. Assigned message/tool arrays are shallow-copied.
  *
- * `tools` and `messages` use accessor properties so implementations can copy
- * assigned arrays before storing them.
+ * ZH: 公开的会话数据与当前执行状态。对话历史持有 system 提示词和工具声明，tools 持有可执行实现。给消息或工具数组赋值时采用浅拷贝。
+ *
+ * EN: isStreaming, streamingMessage, pendingToolCalls, and errorMessage are runtime observations.
+ * isStreaming remains true through awaited agent_end listeners, until final cleanup.
+ *
+ * ZH: isStreaming、streamingMessage、pendingToolCalls 和 errorMessage 用来观察运行时。isStreaming 在等待 agent_end
+ * 监听器期间仍为 true，直到最终清理才结束。
  */
 export interface AgentState {
 	/**
@@ -420,7 +447,19 @@ export interface AgentState {
 	readonly errorMessage?: string;
 }
 
-/** Final or partial result produced by a tool. */
+/**
+ * EN: A partial or final tool result. content goes to the model; details supports presentation;
+ * structuredContent serves programmatic callers. isError reports a failure without throwing and preserves
+ * the structured result.
+ *
+ * ZH: 工具的部分或最终结果。content 传给模型，details 用于展示，structuredContent 服务于程序调用者。isError 可在不抛异常的情况下表达失败，并保留结构化结果。
+ *
+ * EN: terminate is a runtime scheduling hint. The agent skips automatic tool continuation only when every
+ * finalized result in the batch sets it. It does not override queued input or an explicit finishTurn
+ * continuation.
+ *
+ * ZH: terminate 是运行时调度提示。只有批次中每个已完成结果都设置它时，Agent 才跳过自动工具续跑；它不会覆盖排队输入或 finishTurn 显式要求的续跑。
+ */
 export interface AgentToolResult<T = JsonValue | undefined> {
 	/** Text or image content returned to the model. */
 	content: (TextContent | ImageContent)[];
@@ -460,7 +499,18 @@ export interface AgentToolCallOutcome {
  */
 export type AgentToolUpdateCallback<T = any> = (partialResult: AgentToolResult<T>) => void;
 
-/** Tool definition used by the agent runtime. */
+/**
+ * EN: Executable tool contract layered over the model-visible schema. The loop resolves name, optionally
+ * prepares raw arguments, validates the schema, and only then calls execute with the abort signal and
+ * progress callback.
+ *
+ * ZH: 在模型可见 schema 之上增加的可执行工具契约。循环按名称查找工具，可选地准备原始参数，验证 schema 后，才把取消信号和进度回调传给 execute。
+ *
+ * EN: A tool must throw or set isError on failure; error text alone does not mark failure. Updates after
+ * execute settles are ignored. A sequential override makes the entire assistant tool batch sequential.
+ *
+ * ZH: 工具失败时必须抛异常或设置 isError；仅返回错误文本不会被标记为失败。execute 完成后的更新会被忽略。工具的串行覆盖设置会让整条 assistant 消息的工具批次串行执行。
+ */
 export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any> extends Tool<TParameters> {
 	/** Human-readable label for UI display. */
 	label: string;
@@ -496,7 +546,12 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 	executionMode?: ToolExecutionMode;
 }
 
-/** Context snapshot passed into the low-level agent loop. */
+/**
+ * EN: Input and working state of a low-level loop. messages is the transcript, including prompt and
+ * declared tools in system messages; tools contains the functions the host can actually execute.
+ *
+ * ZH: 底层循环的输入与工作状态。messages 是对话记录，其中的 system 消息保存提示词及工具声明；tools 则包含宿主实际能够执行的函数。
+ */
 export interface AgentContext {
 	/** Transcript visible to the model. */
 	messages: AgentMessage[];
@@ -505,11 +560,15 @@ export interface AgentContext {
 }
 
 /**
- * Events emitted by the Agent for UI updates.
+ * EN: Discriminated union for run, turn, message, and tool lifecycles. One run can contain many turns; one
+ * turn contains one assistant response and its tool results. Only assistant streaming emits message_update.
  *
- * `agent_end` is the last event emitted for a run, but awaited `Agent.subscribe()`
- * listeners for that event are still part of run settlement. The agent becomes
- * idle only after those listeners finish.
+ * ZH: 区分运行、轮次、消息和工具生命周期的联合类型。一次运行可含多轮，一轮包含一次 assistant 响应及其工具结果；只有 assistant 的流式过程会发出 message_update。
+ *
+ * EN: agent_end is the final loop event. It does not mean awaited subscribers or Agent cleanup have
+ * finished; use prompt settlement or waitForIdle for that boundary.
+ *
+ * ZH: agent_end 是循环最后一个事件，并不代表被等待的订阅者或 Agent 清理已经完成；应通过 prompt 完成或 waitForIdle 判断该边界。
  */
 export type AgentEvent =
 	// Agent lifecycle

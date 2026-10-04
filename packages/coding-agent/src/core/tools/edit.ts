@@ -100,6 +100,14 @@ export interface EditToolOptions {
 	operations?: EditOperations;
 }
 
+/**
+ * EN: Normalize provider argument shapes before schema validation: decode a JSON-string edits field, wrap a
+ * single edit, and convert legacy oldText/newText into edits. Some branches mutate the input object, so
+ * this is not a pure validator.
+ *
+ * ZH: 在 schema 验证之前规范化 Provider 参数形状：解码字符串形式的 edits、包装单个编辑，并将旧 oldText/newText 转为
+ * edits。部分分支会修改输入对象，因此这不是纯验证函数。
+ */
 function prepareEditArguments(input: unknown): EditToolInput {
 	if (!input || typeof input !== "object") {
 		return input as EditToolInput;
@@ -140,6 +148,19 @@ function validateEditInput(input: EditToolInput): { path: string; edits: Edit[] 
 	return { path: input.path, edits: input.edits };
 }
 
+/**
+ * EN: Apply a batch of replacements to one original file under the per-path mutation queue. Normalize BOM
+ * and line endings for matching, delegate match and overlap checks to applyEditsToNormalizedContent(), then
+ * restore the original format and write once.
+ *
+ * ZH: 在按路径串行的修改队列内，对同一份原始文件应用一批替换。匹配前处理 BOM 和换行，将匹配及重叠检查交给 applyEditsToNormalizedContent()，随后恢复原格式并写入一次。
+ *
+ * EN: Return display diff, unified patch, and first changed line as details. Cancellation waits for
+ * in-flight I/O to settle before releasing the queue; a completed write is not rolled back when
+ * cancellation is then observed.
+ *
+ * ZH: 在 details 中返回展示 diff、统一补丁和首个修改行。取消仍需等待已开始的 I/O 完成后才释放队列；若随后观察到取消，已完成写入不会回滚。
+ */
 export function createEditToolDefinition(
 	cwd: string,
 	options?: EditToolOptions,
@@ -215,6 +236,12 @@ export function createEditToolDefinition(
 	};
 }
 
+/**
+ * EN: Adapt the edit definition for a direct Agent. The definition owns file behavior; the Agent tool
+ * pipeline owns validation, hooks, progress events, and conversion of thrown errors.
+ *
+ * ZH: 为直接使用 Agent 适配 edit 定义。定义负责文件行为，Agent 工具流水线负责验证、hook、进度事件及抛出错误的转换。
+ */
 export function createEditTool(cwd: string, options?: EditToolOptions): AgentTool<typeof editSchema> {
 	return wrapToolDefinition(createEditToolDefinition(cwd, options));
 }

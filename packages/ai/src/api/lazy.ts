@@ -39,9 +39,11 @@ async function forwardStream(
 }
 
 /**
- * Returns a stream synchronously while running async setup (auth resolution,
- * lazy module loading) behind it. Setup failures terminate the stream with an
- * error event.
+ * EN: Return an event stream now, while asynchronous authentication or module loading prepares its
+ * producer. Forward inner events and the final result; convert setup or forwarding failures to an error
+ * AssistantMessage.
+ *
+ * ZH: 立即返回事件流，同时由异步认证或模块加载准备生产者。转发内部事件和最终结果，并把准备或转发失败转换为错误 AssistantMessage。
  */
 export function lazyStream(
 	model: Model<Api>,
@@ -70,6 +72,12 @@ export interface LazyApiCapabilities {
 	cancelDeferred?: boolean;
 }
 
+/**
+ * EN: Adapt a deferred API module loader to ProviderStreams. Each call obtains the implementation through
+ * the host import cache. Optional deferred-response capabilities are advertised only when requested.
+ *
+ * ZH: 把延迟 API 模块加载器适配为 ProviderStreams。每次调用通过宿主导入缓存获得实现；仅在配置要求时声明可选的延迟响应能力。
+ */
 export function lazyApi(load: () => Promise<ProviderStreams>, capabilities?: LazyApiCapabilities): ProviderStreams {
 	const api: ProviderStreams = {
 		stream: (model, context, options) =>

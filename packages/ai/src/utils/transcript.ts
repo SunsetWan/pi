@@ -4,8 +4,10 @@ import { contentText, getSystemMessageText } from "./text.ts";
 export type { TranscriptContext } from "../types.ts";
 
 /**
- * Build the leading system message for a prompt and tool set. Returns undefined when
- * both are empty, so an empty transcript stays empty.
+ * EN: Create a baseline system message for a nonempty prompt or tool set. Return undefined when both are
+ * empty so normalization does not turn an empty conversation into a system-only one.
+ *
+ * ZH: 为非空提示词或工具集合创建基线 system 消息。两者皆空时返回 undefined，避免规范化把空对话变成仅含 system 的对话。
  */
 export function createInitialSystemMessage(
 	systemPrompt: string | undefined,
@@ -23,9 +25,10 @@ export function createInitialSystemMessage(
 }
 
 /**
- * Fold `Context.systemPrompt` and `Context.tools` into a leading system message.
- * This is the only entry point that produces a {@link TranscriptContext}; every
- * provider-facing function expects the result.
+ * EN: Fold convenience prompt/tool fields into the transcript and return its branded provider-facing type.
+ * It prepends a baseline only when those fields supply content; otherwise the message array is reused.
+ *
+ * ZH: 把便捷的提示词及工具字段合入对话历史，返回带品牌标记的 Provider 侧类型。只有这些字段提供内容时才前置基线消息，否则复用原消息数组。
  */
 export function normalizeContext(context: Context): TranscriptContext {
 	const initialMessage = createInitialSystemMessage(context.systemPrompt, context.tools);
@@ -54,7 +57,12 @@ export function withoutInitialSystemMessage(messages: Message[]): Message[] {
 	return getInitialSystemMessage(messages) ? messages.slice(1) : messages;
 }
 
-/** Resolve the tools available after applying every transcript delta in order. */
+/**
+ * EN: Replay system-message tool changes by name. Each message removes names before adding definitions, so
+ * a redefinition can replace the old schema in one step.
+ *
+ * ZH: 按名称重放 system 消息中的工具变化。每条消息先移除再新增，因此一次重新声明可以替换旧 schema。
+ */
 export function getCurrentTools(messages: TranscriptMessages): Tool[] {
 	const tools = new Map<string, Tool>();
 	for (const message of messages) {
@@ -66,9 +74,10 @@ export function getCurrentTools(messages: TranscriptMessages): Tool[] {
 }
 
 /**
- * Replay every system message into one leading system message holding the current
- * prompt and tools. Later `content` is appended to the base prompt, `sections` are
- * patched by name, and tools are resolved with {@link getCurrentTools}.
+ * EN: Replay every system message into current prompt state. Append instruction content, replace/remove
+ * named sections, and resolve the final tool set. Custom non-system roles are ignored.
+ *
+ * ZH: 把每条 system 消息重放成当前提示词状态：追加指令内容，替换或删除命名段落，解析最终工具集合。自定义的非 system 角色会被忽略。
  */
 export function getCurrentSystemMessage(messages: TranscriptMessages): SystemMessage | undefined {
 	const content: string[] = [];
@@ -111,7 +120,12 @@ export function collapseSystemMessages(context: TranscriptContext): TranscriptCo
 	return { messages: head ? [head, ...messages] : messages } as TranscriptContext;
 }
 
-/** Keep later system messages in place when the model accepts them; otherwise collapse them. */
+/**
+ * EN: Choose the representation a model can accept. Keep system updates in their historical positions when
+ * supported; otherwise rebuild one current leading system message and remove later system entries.
+ *
+ * ZH: 选择模型能够接收的表示。支持时保留 system 更新的历史位置，否则重建一条当前 system 首消息并移除后续 system 条目。
+ */
 export function resolveTranscript(
 	context: TranscriptContext,
 	supportsMidConvoSystemMessages: boolean | undefined,
@@ -119,7 +133,12 @@ export function resolveTranscript(
 	return supportsMidConvoSystemMessages ? context : collapseSystemMessages(context);
 }
 
-/** Strip executable and display-only fields from a tool before transcript comparison or persistence. */
+/**
+ * EN: Project an executable tool onto its model-visible schema. Drop execution and display fields, and
+ * JSON-normalize parameters before transcript comparison or persistence.
+ *
+ * ZH: 把可执行工具投影为模型可见 schema。去掉执行和展示字段，并在对话历史比较或持久化前用 JSON 规范化参数。
+ */
 export function toToolDeclaration(tool: Tool): Tool {
 	return {
 		name: tool.name,
@@ -146,7 +165,12 @@ export interface ToolStateChanges {
 	toolsRemoved: ToolReference[];
 }
 
-/** Compare two complete tool states. A changed definition is a removal followed by an addition. */
+/**
+ * EN: Compare complete old/new tool sets by name and normalized declaration. A changed definition appears
+ * as both a removal and an addition so replay produces the new schema.
+ *
+ * ZH: 按名称和规范化声明比较完整的新旧工具集合。定义变化同时表现为移除和新增，使重放得到新的 schema。
+ */
 export function getToolStateChanges(previous: readonly Tool[], current: readonly Tool[]): ToolStateChanges {
 	const previousTools = new Map(previous.map((tool) => [tool.name, tool]));
 	const currentTools = new Map(current.map((tool) => [tool.name, tool]));
@@ -221,10 +245,10 @@ export interface TranscriptTools {
 }
 
 /**
- * Split tool declarations between the top-level request field and in-place additions.
- * Transports that can anchor additions at a system message keep the initial tools at the
- * top and load later ones where they appear; that only works when no tool was removed or
- * redeclared, so everything else sends the current tool list.
+ * EN: Split initial request tools from later transcript additions only when the transport supports it and
+ * history is addition-only. Any removal or repeated name falls back to the complete current tool set.
+ *
+ * ZH: 仅当协议支持且历史只有新增操作时，将初始请求工具与后续历史新增分开。出现移除或重复名称时，回退到完整的当前工具集合。
  */
 export function resolveTranscriptTools(messages: TranscriptMessages, supportsToolAdditions: boolean): TranscriptTools {
 	const anchorsAdditions = supportsToolAdditions && !hasNonAdditiveToolChanges(messages);

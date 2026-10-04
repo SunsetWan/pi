@@ -29,8 +29,11 @@ export interface ReadToolDetails {
 }
 
 /**
- * Pluggable operations for the read tool.
- * Override these to delegate file reading to remote systems (for example SSH).
+ * EN: I/O boundary for file reading. Supply local or remote operations without changing tool input or
+ * result semantics. These functions have no AbortSignal parameter, so cancellation cannot by itself stop an
+ * already running read.
+ *
+ * ZH: 文件读取的 I/O 边界。可注入本地或远程操作，而不改变工具输入与结果语义。这些函数没有 AbortSignal 参数，因此取消本身不能停止已经开始的读取。
  */
 export interface ReadOperations {
 	/** Read file contents as a Buffer */
@@ -63,6 +66,19 @@ function getNonVisionImageNote(model: Model<Api> | undefined): string | undefine
 	return "[Current model does not support images. The image will be omitted from this request.]";
 }
 
+/**
+ * EN: Build the read tool with its schema, execution, prompt guidance, and UI renderers. Text reads use a
+ * one-based offset, an optional line limit, then line/byte truncation. Image reads use the active model
+ * resize profile with the configured fallback.
+ *
+ * ZH: 组装 read 工具的 schema、执行逻辑、提示词指导和 UI 渲染器。文本读取依次应用从一开始的
+ * offset、可选行数限制，以及行数和字节截断。图片读取优先使用当前模型的缩放配置，再回退到工具配置。
+ *
+ * EN: Cancellation rejects the exposed Promise and suppresses later results; underlying operations can
+ * still finish. Errors are thrown here and converted into tool-result messages by the Agent pipeline.
+ *
+ * ZH: 取消会拒绝对外 Promise 并抑制后续结果，但底层操作仍可能完成。此处抛出的错误由 Agent 工具流水线转换为工具结果消息。
+ */
 export function createReadToolDefinition(
 	cwd: string,
 	options?: ReadToolOptions,
@@ -198,6 +214,12 @@ export function createReadToolDefinition(
 	};
 }
 
+/**
+ * EN: Adapt the full tool definition to the smaller AgentTool contract for direct Agent use. A coding
+ * session instead wraps definitions with an extension execution context.
+ *
+ * ZH: 把完整工具定义适配为较小的 AgentTool 契约，供直接使用 Agent 时调用。编码会话则在包装定义时提供扩展执行上下文。
+ */
 export function createReadTool(cwd: string, options?: ReadToolOptions): AgentTool<typeof readSchema> {
 	return wrapToolDefinition(createReadToolDefinition(cwd, options));
 }

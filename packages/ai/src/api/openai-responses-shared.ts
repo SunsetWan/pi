@@ -142,6 +142,18 @@ export interface ConvertResponsesToolsOptions {
 // Message conversion
 // =============================================================================
 
+/**
+ * EN: Convert normalized Pi history to Responses input items. Handle system capabilities, multimodal user
+ * input, assistant replay, and tool results while preserving call/result identity.
+ *
+ * ZH: 把规范化 Pi 历史转换成 Responses 输入条目。处理 system 能力、多模态用户输入、assistant 重放及工具结果，同时保留调用与结果的关联。
+ *
+ * EN: A Pi tool id can contain call_id and item id separated by a pipe. Replay normalizes foreign ids and
+ * may omit model-specific item ids to avoid invalid reasoning pairings. Signatures preserve native text and
+ * reasoning replay metadata.
+ *
+ * ZH: Pi 工具 ID 可用竖线连接 call_id 与条目 ID。重放会规范化外来 ID，并可能省略模型专用条目 ID，以避免无效的推理配对。签名保留原生文本及推理重放元数据。
+ */
 export function convertResponsesMessages<TApi extends Api>(
 	model: Model<TApi>,
 	context: TranscriptContext,
@@ -357,6 +369,13 @@ export function convertResponsesMessages<TApi extends Api>(
 // Tool conversion
 // =============================================================================
 
+/**
+ * EN: Translate tool schemas into native function or grammar tools. Respect each tool's
+ * constrained-sampling request and the target API's capabilities. The result describes available calls; it
+ * contains no executable implementation.
+ *
+ * ZH: 把工具 schema 转换为原生 function 或 grammar 工具，遵循各工具的约束采样要求和目标 API 能力。结果只描述可用调用，不包含执行实现。
+ */
 export function convertResponsesTools(tools: readonly Tool[], options?: ConvertResponsesToolsOptions): OpenAITool[] {
 	const defaultStrict = options?.strict === undefined ? false : options.strict;
 	const supportsStrictMode = options?.supportsStrictMode ?? true;
@@ -430,6 +449,19 @@ type ResponsesOutputSlot =
 
 type ToolCallOutputSlot = Extract<ResponsesOutputSlot, { type: "toolCall" }>;
 
+/**
+ * EN: Reduce native stream events into a shared AssistantMessage and emit Pi block events. output_index
+ * maps interleaved native items to content slots; item completion supplies authoritative text, arguments,
+ * and replay signatures.
+ *
+ * ZH: 把原生流事件归入共享 AssistantMessage，并发出 Pi 内容块事件。output_index 将交错到达的原生条目映射到内容位置；条目完成时提供权威文本、参数及重放签名。
+ *
+ * EN: A terminal response supplies usage and stop reason. Missing terminal events or unfinished tool-call
+ * buffers cause rejection; the outer stream adapter turns that failure into an error event. This reducer
+ * does not emit the outer done event itself.
+ *
+ * ZH: 终止响应提供用量和停止原因。终止事件缺失或工具调用仍留有未完成缓冲区时会拒绝；外层流适配器再将失败转换为 error 事件。此归并函数本身不发出外层 done 事件。
+ */
 export async function processResponsesStream<TApi extends Api>(
 	openaiStream: AsyncIterable<ResponseStreamEvent>,
 	output: AssistantMessage,
@@ -776,6 +808,14 @@ export async function processResponsesStream<TApi extends Api>(
 	}
 }
 
+/**
+ * EN: Map Responses status into Pi control-flow status. Only max_output_tokens truncation becomes length;
+ * other incomplete reasons become error with a diagnostic message, so filtering is not mistaken for
+ * ordinary truncation.
+ *
+ * ZH: 把 Responses 状态映射为 Pi 控制流状态。只有 max_output_tokens 截断变成 length；其他 incomplete 原因变成带诊断信息的
+ * error，避免把内容过滤误判为普通截断。
+ */
 function mapStopReason(
 	status: OpenAI.Responses.ResponseStatus | undefined,
 	incompleteReason?: string,

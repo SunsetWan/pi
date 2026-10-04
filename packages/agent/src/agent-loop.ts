@@ -29,11 +29,24 @@ import type {
 	StreamFn,
 } from "./types.ts";
 
+/**
+ * EN: Event callback awaited by the direct loop API. Hosts can finish state or persistence work before the
+ * producer enters its next phase.
+ *
+ * ZH: 直接循环 API 会等待的事件回调，使宿主能先完成状态或持久化处理，再让事件生产者进入下一阶段。
+ */
 export type AgentEventSink = (event: AgentEvent) => Promise<void> | void;
 
 /**
- * Start an agent loop with a new prompt message.
- * The prompt is added to the context and events are emitted for it.
+ * EN: Start a prompt run and expose an observable event stream. This adapter pushes events into a queue; it
+ * does not await asynchronous work performed by the stream consumer.
+ *
+ * ZH: 启动一次 prompt 运行，并暴露可观察事件流。此适配器只是把事件放入队列，不会等待流消费者进行的异步处理。
+ *
+ * EN: Use {@link Agent} or {@link runAgentLoop} when consumer work must finish before tool preflight. The
+ * stream result contains messages added by this run, including its initial input.
+ *
+ * ZH: 需要在工具预检查前完成消费侧处理时，使用 Agent 或 runAgentLoop。流的最终结果包含本次新增的消息，包括初始输入。
  */
 export function agentLoop(
 	prompts: AgentMessage[],
@@ -61,12 +74,15 @@ export function agentLoop(
 }
 
 /**
- * Continue an agent loop from the current context without adding a new message.
- * Used for retries - context already has user message or tool results.
+ * EN: Expose a continuation as an observable stream without adding new input. Reject empty context or an
+ * assistant tail. Other tail roles must convert to provider-accepted input at the model boundary.
  *
- * **Important:** The last message in context must convert to a `user` or `toolResult` message
- * via `convertToLlm`. If it doesn't, the LLM provider will reject the request.
- * This cannot be validated here since `convertToLlm` is only called once per turn.
+ * ZH: 把续跑暴露为可观察流，不追加新输入。空上下文和 assistant 末尾会被拒绝；其他末尾角色需要在模型边界转换成 Provider 可接受的输入。
+ *
+ * EN: As with `agentLoop()`, stream consumers do not block producer phases. The final result contains only
+ * messages produced by this continuation.
+ *
+ * ZH: 与 agentLoop() 相同，流消费者不会阻塞生产者阶段。最终结果仅包含此次续跑产生的消息。
  */
 export function agentLoopContinue(
 	context: AgentContext,
@@ -99,6 +115,17 @@ export function agentLoopContinue(
 	return stream;
 }
 
+/**
+ * EN: Prepare a prompt run with awaited event delivery. Reconcile tool declarations, copy the outer context
+ * message array, emit startup and input events, then enter the shared loop.
+ *
+ * ZH: 准备一次逐事件等待的 prompt 运行。先协调工具声明、复制上下文消息的外层数组，发出启动与输入事件，再进入共享循环。
+ *
+ * EN: Return only this run's new messages. The event sink may update a separate Agent transcript; it is not
+ * the same array as the loop context.
+ *
+ * ZH: 仅返回此次运行新增的消息。事件回调可以更新另一份 Agent 对话历史；它与循环上下文中的数组不是同一个数组。
+ */
 export async function runAgentLoop(
 	prompts: AgentMessage[],
 	context: AgentContext,
@@ -125,6 +152,13 @@ export async function runAgentLoop(
 	return newMessages;
 }
 
+/**
+ * EN: Run the shared loop from existing history with awaited event delivery. Validate the tail and emit
+ * startup events, but do not replay initial input events. The context object is copied; its message array
+ * remains shared.
+ *
+ * ZH: 从现有历史进入逐事件等待的共享循环。验证末尾并发出启动事件，但不重放初始输入事件。这里只复制上下文对象，其中的消息数组仍然共享。
+ */
 export async function runAgentLoopContinue(
 	context: AgentContext,
 	config: AgentLoopConfig,
@@ -158,7 +192,18 @@ function createAgentStream(): EventStream<AgentEvent, AgentMessage[]> {
 }
 
 /**
- * Main loop logic shared by agentLoop and agentLoopContinue.
+ * EN: Schedule model turns until there is no tool continuation, steering input, follow-up input, or
+ * explicit continuation. The inner loop handles tools and steering; the outer loop admits follow-ups after
+ * natural completion.
+ *
+ * ZH: 调度模型轮次，直到不再需要工具续跑、steering 输入、follow-up 输入或显式续跑。内层循环处理工具与 steering，外层循环在自然完成后接纳 follow-up。
+ *
+ * EN: `prepareRequest` runs before every request; `prepareNextTurn` runs only after a completed turn that
+ * will continue. `finishTurn` runs after finalized results. Error and abort responses always end the run,
+ * regardless of its returned decision.
+ *
+ * ZH: prepareRequest 在每次请求前运行；prepareNextTurn 仅在已完成且将继续的轮次之后运行；finishTurn
+ * 在结果确定后运行。错误和取消响应始终结束运行，不受该回调返回的调度决定影响。
  */
 async function runLoop(
 	initialContext: AgentContext,
@@ -321,14 +366,16 @@ async function runLoop(
 }
 
 /**
- * Declare tool loadout changes to the model.
+ * EN: Make the transcript's declared tools match the executable loadout. Replay existing system messages,
+ * compare declarations, and express the difference as toolsAdded/toolsRemoved in a pending or new system
+ * message.
  *
- * `context.tools` is what the runtime can execute; the transcript's system messages declare
- * what the model may call. Before each request the difference becomes `toolsAdded` and
- * `toolsRemoved` on a system message. When a pending system message exists, its tool fields
- * are treated as intent and replaced with the delta between the committed transcript and
- * the executable set, so replay always yields exactly `context.tools`. Otherwise a new
- * system message is inserted before the first non-system pending message.
+ * ZH: 让对话历史中的工具声明与可执行工具集合一致。先重放已有 system 消息并比较声明，再把差异写成待发送或新建 system 消息的 toolsAdded/toolsRemoved。
+ *
+ * EN: A pending system message supplies prompt intent, but its tool fields are recomputed against the
+ * committed transcript. This prevents replay from describing tools that cannot execute.
+ *
+ * ZH: 待发送的 system 消息仍表达提示词意图，但工具字段会依据已提交历史重新计算，避免重放后向模型声明无法执行的工具。
  */
 function declareToolChanges(context: AgentContext, pendingMessages: AgentMessage[]): AgentMessage[] {
 	let systemIndex = -1;
@@ -375,8 +422,16 @@ function withToolChanges(message: SystemMessage, { toolsAdded, toolsRemoved }: T
 }
 
 /**
- * Stream an assistant response from the LLM.
- * This is where AgentMessage[] gets transformed to Message[] for the LLM.
+ * EN: Cross the model boundary: transform Agent messages, convert them to model messages, normalize the
+ * transcript, resolve current credentials, then call the injected stream function.
+ *
+ * ZH: 跨越模型边界：变换 Agent 消息、转换为模型消息、规范化对话记录、获取当前凭据，然后调用注入的流式函数。
+ *
+ * EN: Provider deltas become message_update events. A final done/error result replaces the partial context
+ * entry and emits message_end. Awaiting that event lets Agent state settle before tool execution.
+ *
+ * ZH: Provider 增量事件被转换为 message_update。最终 done/error 结果替换上下文里的部分消息，并发出 message_end。等待该事件使 Agent
+ * 状态能在工具执行前完成更新。
  */
 async function streamAssistantResponse(
 	context: AgentContext,
@@ -469,11 +524,11 @@ async function streamAssistantResponse(
 }
 
 /**
- * Fail all tool calls from an assistant message that was truncated by the
- * output token limit. Streamed tool-call arguments are finalized with a
- * best-effort JSON salvage parser, so a truncated message can yield tool calls
- * whose arguments parse and validate but are silently incomplete. None of them
- * are safe to execute; report each as an error so the model can re-issue them.
+ * EN: Emit error results for every tool call in a length-limited response. Salvaged JSON can be valid but
+ * incomplete, so no tool is executed. Return non-terminating results so the model can retry with complete
+ * arguments.
+ *
+ * ZH: 为达到输出长度上限的响应中每个工具调用生成错误结果。补救解析后的 JSON 可能合法却不完整，因此不执行任何工具。结果不要求终止，使模型可用完整参数重试。
  */
 async function failToolCallsFromTruncatedMessage(
 	toolCalls: AgentToolCall[],
@@ -503,7 +558,10 @@ async function failToolCallsFromTruncatedMessage(
 }
 
 /**
- * Execute tool calls from an assistant message.
+ * EN: Choose a scheduling policy for one assistant message. A global sequential mode or any tool marked
+ * sequential makes the whole batch sequential; otherwise use parallel execution.
+ *
+ * ZH: 为一条 assistant 消息选择工具调度策略。全局串行模式或任一工具标记为串行，都会让整批串行执行；否则使用并行执行。
  */
 async function executeToolCalls(
 	currentContext: AgentContext,
@@ -527,6 +585,13 @@ type ExecutedToolCallBatch = {
 	terminate: boolean;
 };
 
+/**
+ * EN: Prepare, execute, finalize, and publish each tool result before starting the next call. Stop
+ * scheduling remaining calls after cancellation. Batch termination requires every finalized result to
+ * request it.
+ *
+ * ZH: 每个工具依次完成准备、执行、结果处理与发布后，再开始下一个。取消后停止调度剩余调用。只有所有已完成结果都要求终止，批次才返回终止标记。
+ */
 async function executeToolCallsSequential(
 	currentContext: AgentContext,
 	assistantMessage: AssistantMessage,
@@ -583,6 +648,18 @@ async function executeToolCallsSequential(
 	};
 }
 
+/**
+ * EN: Preflight calls in source order, then execute allowed calls concurrently. Publish execution-end
+ * events as calls finish, but publish transcript tool results in the assistant's original call order after
+ * all settle.
+ *
+ * ZH: 按源码顺序预检查调用，再并发执行获准的调用。执行结束事件按完成时机发布；全部完成后，对话历史里的工具结果仍按 assistant 原始调用顺序发布。
+ *
+ * EN: These two orders serve different needs: live progress can be immediate while the next model request
+ * receives a stable transcript order.
+ *
+ * ZH: 两种顺序服务于不同需求：实时进度可以立即呈现，而下一次模型请求收到的对话记录仍有稳定顺序。
+ */
 async function executeToolCallsParallel(
 	currentContext: AgentContext,
 	assistantMessage: AssistantMessage,
@@ -704,6 +781,12 @@ function prepareToolCallArguments(tool: AgentTool<any>, toolCall: AgentToolCall)
 	};
 }
 
+/**
+ * EN: Resolve the named tool, prepare and validate its arguments, then run the before hook. Missing tools,
+ * invalid input, blocked calls, cancellation, or thrown preflight errors become immediate error outcomes.
+ *
+ * ZH: 查找命名工具，准备并验证参数，再运行 before hook。工具缺失、输入无效、被阻止、取消或预检查异常都会转成可立即返回的错误结果。
+ */
 async function prepareToolCall(
 	currentContext: AgentContext,
 	assistantMessage: AssistantMessage,
@@ -799,13 +882,15 @@ export interface RunToolCallOptions extends ToolCallHooks {
 }
 
 /**
- * Run one tool call through the same steps as a model-issued call: argument preparation, schema
- * validation, `beforeToolCall`, execution, and `afterToolCall`. Emits no events and adds no
- * messages. Tools that call other tools use this so the hooks (for example permission checks)
- * apply to those calls too.
+ * EN: Run one tool through argument preparation, validation, before hook, execution, and after hook. It
+ * emits no Agent events and appends no messages, so nested tool callers own their surrounding lifecycle.
  *
- * Never rejects for tool failures: unknown tools, validation errors, blocked calls, and thrown
- * errors come back as `isError: true`.
+ * ZH: 让一个工具依次经过参数准备、验证、before hook、执行与 after hook。它不发送 Agent 事件，也不追加消息，因此嵌套工具调用者需管理外围生命周期。
+ *
+ * EN: Tool and hook failures are returned as isError outcomes. Exceptions from an asynchronous update sink
+ * can still reject; event delivery remains a host responsibility.
+ *
+ * ZH: 工具及 hook 的失败以 isError 结果返回。异步进度回调抛出的异常仍可能导致拒绝；事件投递可靠性由宿主负责。
  */
 export async function runToolCall(toolCall: AgentToolCall, options: RunToolCallOptions): Promise<AgentToolCallOutcome> {
 	const { assistantMessage, context, signal } = options;
@@ -817,6 +902,12 @@ export async function runToolCall(toolCall: AgentToolCall, options: RunToolCallO
 	return finalizeExecutedToolCall(context, assistantMessage, preparation, executed, options, signal);
 }
 
+/**
+ * EN: Call the validated tool and wait for all accepted progress updates before returning. Ignore updates
+ * after the tool settles. Convert tool exceptions to error content; propagate update-delivery failures.
+ *
+ * ZH: 调用已验证的工具，并在返回前等待所有已接收的进度更新。工具结束后的更新会被忽略。工具异常转成错误内容，进度投递失败仍向上传播。
+ */
 async function executePreparedToolCall(
 	prepared: PreparedToolCall,
 	signal: AbortSignal | undefined,
@@ -850,6 +941,13 @@ async function executePreparedToolCall(
 	}
 }
 
+/**
+ * EN: Let the after hook replace selected result fields without deep merging. Replacing content without
+ * matching structured content clears the old structured value. A hook failure replaces the result with an
+ * error.
+ *
+ * ZH: 允许 after hook 替换指定结果字段，不做深层合并。替换 content 却未提供匹配的 structuredContent 时，会清除旧结构化值。hook 失败会把结果替换为错误。
+ */
 async function finalizeExecutedToolCall(
 	currentContext: AgentContext,
 	assistantMessage: AssistantMessage,
@@ -919,6 +1017,13 @@ async function emitToolExecutionEnd(finalized: FinalizedToolCallOutcome, emit: A
 	});
 }
 
+/**
+ * EN: Build the model-facing transcript artifact from a finalized tool outcome. Preserve content, details,
+ * usage, error state, and call identity. Runtime termination hints and structuredContent are not copied
+ * into this message.
+ *
+ * ZH: 从已完成的工具结果构造面向模型的历史消息，保留内容、详情、用量、错误状态及调用标识。运行时终止提示和 structuredContent 不复制到这条消息中。
+ */
 function createToolResultMessage(finalized: FinalizedToolCallOutcome): ToolResultMessage {
 	return {
 		role: "toolResult",

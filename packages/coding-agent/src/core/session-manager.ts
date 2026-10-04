@@ -54,6 +54,12 @@ export interface NewSessionOptions {
 	parentSession?: string;
 }
 
+/**
+ * EN: Identity and parent edge of an append-only session tree node. File order records append order;
+ * parentId selects ancestry. Moving the active leaf does not rewrite earlier entries.
+ *
+ * ZH: 仅追加会话树节点的标识与父边。文件顺序记录追加顺序，parentId 决定祖先关系。移动当前叶节点不会重写之前的条目。
+ */
 export interface SessionEntryBase {
 	type: string;
 	id: string;
@@ -88,6 +94,12 @@ export interface UsageEntry extends SessionEntryBase {
 	note?: string;
 }
 
+/**
+ * EN: A context checkpoint: summary, first retained raw entry, usage, and a replayed system prompt/tool
+ * snapshot. Projection uses the latest checkpoint on the active branch; older raw entries remain stored.
+ *
+ * ZH: 上下文检查点：包含摘要、第一个保留的原始条目、用量，以及重放后的 system 提示词和工具快照。投影采用当前分支上最新的检查点，较早的原始条目仍保留。
+ */
 export interface CompactionEntry<T = unknown> extends SessionEntryBase {
 	type: "compaction";
 	summary: string;
@@ -116,14 +128,10 @@ export interface BranchSummaryEntry<T = unknown> extends SessionEntryBase {
 }
 
 /**
- * Custom entry for extensions to store extension-specific data in the session.
- * Use customType to identify your extension's entries.
+ * EN: Persist extension state without adding model input. Extensions can replay their customType entries on
+ * reload. To add model-visible content, use CustomMessageEntry instead.
  *
- * Purpose: Persist extension state across session reloads. On reload, extensions can
- * scan entries for their customType and reconstruct internal state.
- *
- * Does NOT participate in LLM context (ignored by buildSessionContext).
- * For injecting content into context, see CustomMessageEntry.
+ * ZH: 持久化扩展状态，但不增加模型输入。重载时扩展可重放自己的 customType 条目。需要加入模型可见内容时，使用 CustomMessageEntry。
  */
 export interface CustomEntry<T = unknown> extends SessionEntryBase {
 	type: "custom";
@@ -145,16 +153,12 @@ export interface SessionInfoEntry extends SessionEntryBase {
 }
 
 /**
- * Custom message entry for extensions to inject messages into LLM context.
- * Use customType to identify your extension's entries.
+ * EN: Persist extension content that contributes to model context. Projection creates a custom Agent
+ * message; convertToLlm() later turns it into a user message. display controls UI visibility, not model
+ * visibility; details stay application metadata.
  *
- * Unlike CustomEntry, this DOES participate in LLM context.
- * The content is converted to a user message in buildSessionContext().
- * Use details for extension-specific metadata (not sent to LLM).
- *
- * display controls TUI rendering:
- * - false: hidden entirely
- * - true: rendered with distinct styling (different from user messages)
+ * ZH: 持久化会进入模型上下文的扩展内容。投影先生成 custom Agent 消息，随后 convertToLlm() 将其转为 user 消息。display 控制 UI
+ * 可见性，不控制模型可见性；details 保留为应用元数据。
  */
 export interface CustomMessageEntry<T = unknown> extends SessionEntryBase {
 	type: "custom_message";
@@ -171,7 +175,13 @@ export type ContextEditableContent =
 	| ToolResultMessage["content"]
 	| CustomMessage["content"];
 
-/** Append-only change to one earlier entry's contribution to model context. */
+/**
+ * EN: A branch-local overlay on an earlier message. A null replacement omits it; a content replacement
+ * preserves role and identity metadata. The original entry is retained, and the latest applicable edit wins
+ * during projection.
+ *
+ * ZH: 覆盖当前分支上更早消息的条目。replacement 为 null 时省略消息；替换 content 时保留角色和标识元数据。原始条目仍保留，投影采用最后一个适用编辑。
+ */
 export interface ContextEditEntry extends SessionEntryBase {
 	type: "context_edit";
 	targetId: string;
@@ -213,6 +223,12 @@ export interface ProjectedSessionEntry {
 	messages: AgentMessage[];
 }
 
+/**
+ * EN: The model-facing view of one branch after compaction and context edits, with source-entry provenance.
+ * entries can contribute zero or several messages; messages is their flattened sequence.
+ *
+ * ZH: 一条分支在压缩和上下文编辑后的模型视图，并保留源条目来源。每个 entry 可以贡献零条或多条消息；messages 是它们展平后的序列。
+ */
 export interface SessionProjection {
 	entries: ProjectedSessionEntry[];
 	messages: AgentMessage[];
@@ -387,6 +403,12 @@ function buildEntryIndex(entries: SessionEntry[], byId?: Map<string, SessionEntr
 	return index;
 }
 
+/**
+ * EN: Walk parent links from the selected leaf and reverse them into root-to-leaf order. null means an
+ * empty branch; an absent or unknown non-null leaf falls back to the latest entry.
+ *
+ * ZH: 从选定叶节点沿父链接回溯，再反转为从根到叶的顺序。null 表示空分支；未指定或找不到的非空叶节点会回退到最后一个条目。
+ */
 function buildSessionPath(
 	entries: SessionEntry[],
 	leafId?: string | null,
@@ -433,8 +455,11 @@ function getSessionContextSettings(path: SessionEntry[]): Pick<SessionContext, "
 }
 
 /**
- * Project one selected session entry into LLM/runtime messages.
- * Plain custom entries are display/state entries and do not participate in context.
+ * EN: Convert one raw entry into Agent messages without applying context edits. Normalize missing legacy
+ * content, preserve custom roles, and emit both system checkpoint and summary for compaction. State-only
+ * entries return no messages.
+ *
+ * ZH: 把单个原始条目转换为 Agent 消息，此处尚不应用上下文编辑。规范化旧数据缺失的 content、保留自定义角色；压缩条目可同时生成 system 检查点与摘要。纯状态条目不产生消息。
  */
 export function sessionEntryToContextMessages(entry: SessionEntry): AgentMessage[] {
 	if (entry.type === "message") {
@@ -466,12 +491,11 @@ export function sessionEntryToContextMessages(entry: SessionEntry): AgentMessage
 }
 
 /**
- * Build the active, compaction-aware session entry list.
+ * EN: Select the active branch and its newest compaction boundary. Return that checkpoint, its retained
+ * pre-boundary suffix, then later entries. Skip retained system messages because the checkpoint already
+ * contains their replayed state.
  *
- * This follows the current leaf path. If the path contains compaction entries,
- * the latest compaction is represented by the compaction entry itself, followed
- * by the kept entries starting at firstKeptEntryId and all entries after the
- * compaction entry. Older summarized entries are omitted.
+ * ZH: 选择当前分支及其最新压缩边界，依次返回检查点、边界前保留的尾部及后续条目。跳过保留区中的 system 消息，因为检查点已包含其重放状态。
  */
 export function buildContextEntries(
 	entries: SessionEntry[],
@@ -512,9 +536,11 @@ export function buildContextEntries(
 }
 
 /**
- * Build the session context from entries using tree traversal.
- * If leafId is provided, walks from that entry to root.
- * Handles compaction and branch summaries along the path.
+ * EN: Apply one selected context edit to an entry contribution. Omission yields no messages; replacement
+ * changes only editable content. Convert string replacements to text blocks for assistant and toolResult
+ * messages.
+ *
+ * ZH: 对条目贡献的消息应用选中的上下文编辑。省略操作返回空消息；替换仅改变可编辑内容。assistant 和 toolResult 的字符串替换会转为文本块。
  */
 function projectContextEntry(entry: SessionEntry, edit: ContextEditEntry | undefined): AgentMessage[] {
 	const messages = sessionEntryToContextMessages(entry);
@@ -539,7 +565,18 @@ function projectContextEntry(entry: SessionEntry, edit: ContextEditEntry | undef
 	});
 }
 
-/** Build provenance-preserving, compaction-aware model context. */
+/**
+ * EN: Canonical projection pipeline: choose the branch, resolve model/thinking metadata, select
+ * compaction-aware entries, collect the latest edit per target, then map entries to messages. Keep
+ * sourceEntry with each contribution for later edits and recovery.
+ *
+ * ZH: 权威投影流水线：选择分支、解析模型和思考元数据、选择经过压缩处理的条目、收集每个目标的最新编辑，再把条目映射为消息。每份贡献保留 sourceEntry，供后续编辑与恢复使用。
+ *
+ * EN: Only the newest projected compaction emits a summary and system checkpoint. Older compaction entries
+ * can remain in the retained raw range, but contribute no duplicate messages.
+ *
+ * ZH: 只有最新的投影压缩条目生成摘要和 system 检查点。较早压缩条目可以留在保留的原始范围中，但不会贡献重复消息。
+ */
 export function buildSessionProjection(
 	entries: SessionEntry[],
 	leafId?: string | null,
@@ -572,7 +609,12 @@ export function buildSessionProjection(
 	};
 }
 
-/** Build the finalized model context from the canonical session projection. */
+/**
+ * EN: Return the flattened messages and settings from buildSessionProjection(). Use the full projection
+ * when source-entry ids are needed; this convenience view omits provenance.
+ *
+ * ZH: 返回 buildSessionProjection() 展平后的消息和设置。需要源条目 ID 时应使用完整投影，这个便捷视图不携带来源映射。
+ */
 export function buildSessionContext(
 	entries: SessionEntry[],
 	leafId?: string | null,
@@ -623,7 +665,18 @@ function parseSessionEntryLine(line: string): FileEntry | null {
 	}
 }
 
-/** Exported for testing */
+/**
+ * EN: Read JSONL with incremental UTF-8 decoding and skip malformed lines. Require a valid first parsed
+ * session header. If the valid file has an unterminated final line, append a newline so the next append
+ * cannot join two records.
+ *
+ * ZH: 以增量 UTF-8 解码读取 JSONL，跳过格式错误的行，并要求第一条解析成功的数据为有效会话头。有效文件的末行缺少换行时，会补写换行，避免后续追加把两条记录连在一起。
+ *
+ * EN: This loader can repair the file and is not a strictly read-only inspection API. It checks the header
+ * shape, not the full schema of every entry.
+ *
+ * ZH: 此加载器可能修复文件，并非严格只读的检查 API。它检查会话头的形状，不会完整验证每个条目的 schema。
+ */
 export function loadEntriesFromFile(filePath: string): FileEntry[] {
 	const resolvedFilePath = normalizePath(filePath);
 	if (!existsSync(resolvedFilePath)) return [];
@@ -974,15 +1027,17 @@ async function listSessionsFromDir(
 }
 
 /**
- * Manages conversation sessions as append-only trees stored in JSONL files.
+ * EN: Own the append-only JSONL tree, its indexes, and its active leaf. append methods add a child and
+ * advance the leaf; branch() moves the leaf for future appends. getEntries(), getBranch(), and
+ * buildSessionProjection() expose raw history, ancestry, and model context respectively.
  *
- * Each session entry has an id and parentId forming a tree structure. The "leaf"
- * pointer tracks the current position. Appending creates a child of the current leaf.
- * Branching moves the leaf to an earlier entry, allowing new branches without
- * modifying history.
+ * ZH: 管理仅追加的 JSONL 树、索引和当前叶节点。append 方法添加子节点并推进叶节点，branch()
+ * 移动叶节点以决定后续追加位置。getEntries()、getBranch()、buildSessionProjection() 分别提供原始历史、祖先路径和模型上下文。
  *
- * Use buildSessionContext() to get the resolved message list for the LLM, which
- * handles compaction summaries and follows the path from root to current leaf.
+ * EN: Normal edits and compaction append records instead of deleting history. Opening older files can
+ * migrate and rewrite them. Use inMemory() for examples that must avoid session-file writes.
+ *
+ * ZH: 正常编辑与压缩通过追加记录实现，不删除历史。打开旧文件时可能执行迁移和重写。需要避免会话文件写入的示例应使用 inMemory()。
  */
 export class SessionManager {
 	private sessionId: string = "";
@@ -1169,6 +1224,13 @@ export class SessionManager {
 		);
 	}
 
+	/**
+	 * EN: Delay creation of a new session file until a user or assistant message exists. The first flush writes
+	 * all buffered records with exclusive creation; later calls append one JSONL record. File errors propagate
+	 * to the caller.
+	 *
+	 * ZH: 新会话出现 user 或 assistant 消息后才创建文件。首次写入使用独占创建并写出全部缓冲记录，后续调用每次追加一条 JSONL。文件错误会向调用者传播。
+	 */
 	_persist(entry: SessionEntry): void {
 		if (!this.persist || !this.sessionFile) return;
 
@@ -1188,6 +1250,12 @@ export class SessionManager {
 		}
 	}
 
+	/**
+	 * EN: Update raw history, the id index, and the leaf before writing. This sequence is synchronous but not a
+	 * rollback transaction: an I/O error can leave the in-memory tree ahead of the file.
+	 *
+	 * ZH: 先更新原始历史、ID 索引和叶节点，再写文件。这是同步顺序，但不是可回滚事务：I/O 错误可能使内存树领先于文件。
+	 */
 	private _appendEntry(entry: SessionEntry): void {
 		this.fileEntries.push(entry);
 		this.byId.set(entry.id, entry);
@@ -1195,11 +1263,11 @@ export class SessionManager {
 		this._persist(entry);
 	}
 
-	/** Append a message as child of current leaf, then advance leaf. Returns entry id.
-	 * Does not allow writing CompactionSummaryMessage and BranchSummaryMessage directly.
-	 * Reason: we want these to be top-level entries in the session, not message session entries,
-	 * so it is easier to find them.
-	 * These need to be appended via appendCompaction() and appendBranchSummary() methods.
+	/**
+	 * EN: Wrap one message in a new entry whose parent is the current leaf, append it, and return its id.
+	 * Compaction and branch summaries use dedicated entry methods so projection can locate their boundaries.
+	 *
+	 * ZH: 把一条消息包装成以当前叶节点为父的新条目，追加后返回 ID。压缩与分支摘要使用专门的条目方法，使投影可以识别其边界。
 	 */
 	appendMessage(message: Message | CustomMessage | BashExecutionMessage): string {
 		const entry: SessionMessageEntry = {
@@ -1257,7 +1325,13 @@ export class SessionManager {
 		return entry;
 	}
 
-	/** Append a compaction summary as child of current leaf, then advance leaf. Returns entry id. */
+	/**
+	 * EN: Capture the current replayed system prompt and tools, then append the summary boundary.
+	 * firstKeptEntryId selects the retained suffix; null points to the new checkpoint itself, retaining no
+	 * older entries. This method stores a prepared summary; it does not call a model.
+	 *
+	 * ZH: 保存当前重放得到的 system 提示词与工具，再追加摘要边界。firstKeptEntryId 指定保留尾部；null 会指向新检查点自身，不保留更早条目。此方法存储已准备的摘要，不调用模型。
+	 */
 	appendCompaction<T = unknown>(
 		summary: string,
 		firstKeptEntryId: string | null,
@@ -1356,7 +1430,13 @@ export class SessionManager {
 		return entry.id;
 	}
 
-	/** Append a branch-local edit to an earlier model-visible entry. */
+	/**
+	 * EN: Validate that the target is an editable message on the active branch, then append its content overlay
+	 * or omission. Reject cross-branch and state-only targets. Earlier raw content and other branches are
+	 * unchanged.
+	 *
+	 * ZH: 验证目标是当前分支上的可编辑消息，再追加其内容覆盖或省略条目。拒绝跨分支目标和纯状态目标。较早的原始内容与其他分支保持不变。
+	 */
 	appendContextEdit(targetId: string, replacement: ContextEditEntry["replacement"]): string {
 		if (
 			replacement !== null &&
@@ -1487,8 +1567,10 @@ export class SessionManager {
 	}
 
 	/**
-	 * Build the session context (what gets sent to the LLM).
-	 * Uses tree traversal from current leaf.
+	 * EN: Project the current leaf with the manager's id index. This is the canonical finalized context used by
+	 * AgentSession; inspecting all raw entries gives a different view.
+	 *
+	 * ZH: 使用 manager 的 ID 索引投影当前叶节点。这是 AgentSession 使用的权威已完成上下文，与读取全部原始条目得到的视图不同。
 	 */
 	buildSessionProjection(): SessionProjection {
 		return buildSessionProjection(this.getEntries(), this.leafId, this.byId);
@@ -1571,10 +1653,10 @@ export class SessionManager {
 	// =========================================================================
 
 	/**
-	 * Start a new branch from an earlier entry.
-	 * Moves the leaf pointer to the specified entry. The next appendXXX() call
-	 * will create a child of that entry, forming a new branch. Existing entries
-	 * are not modified or deleted.
+	 * EN: Move only the in-memory leaf pointer. The next append records a child of this entry and preserves the
+	 * abandoned path. Moving the pointer alone does not write a durable branch marker.
+	 *
+	 * ZH: 只移动内存中的叶节点指针。下一次追加会记录该节点的子节点，并保留离开的路径。仅移动指针不会写入持久化分支标记。
 	 */
 	branch(branchFromId: string): void {
 		if (!this.byId.has(branchFromId)) {
@@ -1800,7 +1882,13 @@ export class SessionManager {
 		return new SessionManager(cwd, dir, undefined, true);
 	}
 
-	/** Create an in-memory session (no file persistence), optionally from entries held outside the filesystem. */
+	/**
+	 * EN: Create a session tree without file persistence, optionally from supplied entries. It uses the same
+	 * projection and append logic as a file-backed session, making it suitable for deterministic learning
+	 * examples.
+	 *
+	 * ZH: 创建不进行文件持久化的会话树，可选地从给定条目恢复。它与文件会话使用相同的投影和追加逻辑，适合可重复的学习示例。
+	 */
 	static inMemory(cwd: string = process.cwd(), options?: NewSessionOptions, entries?: FileEntry[]): SessionManager {
 		return new SessionManager(cwd, "", undefined, false, options, entries);
 	}

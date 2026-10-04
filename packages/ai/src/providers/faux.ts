@@ -75,6 +75,13 @@ function normalizeFauxAssistantContent(content: string | FauxContentBlock | Faux
 	return Array.isArray(content) ? content : [content];
 }
 
+/**
+ * EN: Construct a scripted assistant response for local tests. Plain text becomes a text block. The caller
+ * selects stopReason explicitly, including toolUse for a scripted tool turn; the factory does not infer it
+ * from content.
+ *
+ * ZH: 为本地测试构造预设 assistant 响应。普通文本被包装成文本块。调用者需显式选择 stopReason，包括工具轮次的 toolUse；工厂不会从内容自动推断。
+ */
 export function fauxAssistantMessage(
 	content: string | FauxContentBlock | FauxContentBlock[],
 	options: {
@@ -143,6 +150,13 @@ export interface FauxProviderRegistration {
 	unregister: () => void;
 }
 
+/**
+ * EN: Own one faux provider and its response queue. setResponses replaces pending steps, appendResponses
+ * extends them, and state exposes request counters. Register provider into an explicit Models collection.
+ *
+ * ZH: 持有一个 faux Provider 及其响应队列。setResponses 替换待处理步骤，appendResponses 追加步骤，state 暴露请求计数。将 provider 注册到显式
+ * Models 集合后使用。
+ */
 export interface FauxProviderHandle {
 	provider: Provider;
 	api: string;
@@ -336,6 +350,17 @@ function scheduleChunk(chunk: string, tokensPerSecond: number | undefined): Prom
 	return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
+/**
+ * EN: Replay one scripted response through the real assistant event protocol. Emit start, per-block deltas,
+ * and a terminal result; check cancellation between chunks and return an aborted message when signaled.
+ *
+ * ZH: 通过真实 assistant 事件协议重放一条预设响应。发出 start、各内容块的增量及终止结果，在分块之间检查取消，并在收到信号时返回 aborted 消息。
+ *
+ * EN: Default chunk sizes are random within a range. Fix min and max to the same value when debugging event
+ * boundaries. The response content is scripted; timing and token estimates are simulations.
+ *
+ * ZH: 默认分块大小在一个范围内随机选择。调试事件边界时可把 min 和 max 设为相同值。响应内容是预设的，时间和 token 用量只是模拟。
+ */
 async function streamWithDeltas(
 	stream: AssistantMessageEventStream,
 	message: AssistantMessage,
@@ -434,6 +459,13 @@ async function streamWithDeltas(
 	stream.end(message);
 }
 
+/**
+ * EN: Build a local response queue, model metadata, and stream functions without network requests. Each
+ * request consumes one step before its microtask runs. Empty queues emit an error, making unexpected extra
+ * turns visible.
+ *
+ * ZH: 构造本地响应队列、模型元数据与流式函数，不发起网络请求。每次请求在微任务运行前消费一个步骤。队列为空时发出错误，使意外多出的轮次可被发现。
+ */
 export function createFauxCore(options: RegisterFauxProviderOptions) {
 	const api = options.api ?? randomId(DEFAULT_API);
 	const provider = options.provider ?? DEFAULT_PROVIDER;
@@ -675,14 +707,12 @@ export function createFauxCore(options: RegisterFauxProviderOptions) {
 }
 
 /**
- * Faux provider for tests built on explicit `Models` collections:
+ * EN: Create a provider handle for explicit Models registration. Its auth resolver is deliberately keyless.
+ * Set queued responses, register handle.provider with models.setProvider(), then inject models.streamSimple
+ * into Agent.
  *
- * ```ts
- * const faux = fauxProvider();
- * const models = createModels();
- * models.setProvider(faux.provider);
- * faux.setResponses([fauxAssistantMessage("hi")]);
- * ```
+ * ZH: 创建供显式 Models 注册的 Provider 句柄。其认证解析器刻意无需密钥。设置响应队列，把 handle.provider 注册到 models.setProvider()，再将
+ * models.streamSimple 注入 Agent。
  */
 export function fauxProvider(options: RegisterFauxProviderOptions = {}): FauxProviderHandle {
 	const core = createFauxCore(options);
